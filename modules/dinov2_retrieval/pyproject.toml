@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dinov2-retrieval"
+version = "0.1.0"
+description = "Isolated image validation scaffold for the DINOv2 retrieval module"
+requires-python = ">=3.11"
+dependencies = [
+    "Pillow>=10.0,<13.0",
+    "pydantic>=2.0,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10.0",
+]
+ml = [
+    "torch>=2.4,<3.0",
+    "torchvision>=0.19,<1.0",
+    "transformers>=4.45,<5.0",
+    "numpy>=1.26,<3.0",
+    "accelerate>=0.34,<2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
