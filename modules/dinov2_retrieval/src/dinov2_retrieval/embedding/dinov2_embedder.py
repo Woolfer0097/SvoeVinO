@@ -7,17 +7,30 @@ from typing import Any
 
 from PIL import Image
 
+from ..config import (
+    DEFAULT_DINO_EMBEDDING_DIMENSION,
+    DEFAULT_DINO_MODEL_NAME,
+    get_dino_embedding_dimension,
+    get_dino_model_name,
+)
+from .base import EmbeddingError
+
 
 class DinoV2Embedder:
-    """Create normalized 384-dimensional embeddings with DINOv2-small."""
+    """Create normalized 384-dimensional embeddings with DINOv2-small.
 
-    MODEL_NAME = "facebook/dinov2-small"
-    EMBEDDING_DIMENSION = 384
+    The model name and the expected dimension default to ``DINO_MODEL_NAME``
+    and ``DINO_EMBEDDING_DIMENSION``.
+    """
+
+    MODEL_NAME = DEFAULT_DINO_MODEL_NAME
+    EMBEDDING_DIMENSION = DEFAULT_DINO_EMBEDDING_DIMENSION
 
     def __init__(
         self,
-        model_name: str = MODEL_NAME,
+        model_name: str | None = None,
         *,
+        embedding_dimension: int | None = None,
         torch_module: Any | None = None,
         processor: Any | None = None,
         model: Any | None = None,
@@ -28,12 +41,20 @@ class DinoV2Embedder:
         self._torch = (
             torch_module if torch_module is not None else import_module("torch")
         )
-        self._model_name = model_name
+        self._model_name = get_dino_model_name(model_name)
+        self._embedding_dimension = get_dino_embedding_dimension(embedding_dimension)
 
         if processor is None and model is None:
             transformers = import_module("transformers")
-            processor = transformers.AutoImageProcessor.from_pretrained(model_name)
-            model = transformers.AutoModel.from_pretrained(model_name)
+            try:
+                processor = transformers.AutoImageProcessor.from_pretrained(
+                    self._model_name
+                )
+                model = transformers.AutoModel.from_pretrained(self._model_name)
+            except (OSError, ValueError) as exc:
+                raise EmbeddingError(
+                    f"Cannot load model {self._model_name}: {exc}"
+                ) from exc
 
         self.processor = processor
         self.model = model
@@ -51,6 +72,10 @@ class DinoV2Embedder:
     def device(self) -> str:
         return str(self._device)
 
+    @property
+    def embedding_dimension(self) -> int:
+        return self._embedding_dimension
+
     def embed(self, image: Image.Image) -> list[float]:
         """Return an L2-normalized embedding for an RGB image."""
 
@@ -67,10 +92,10 @@ class DinoV2Embedder:
             )
 
         values = [float(value) for value in embedding.detach().cpu().flatten().tolist()]
-        if len(values) != self.EMBEDDING_DIMENSION:
-            raise ValueError(
+        if len(values) != self._embedding_dimension:
+            raise EmbeddingError(
                 "DINOv2 embedding has unexpected dimension: "
-                f"{len(values)}; expected {self.EMBEDDING_DIMENSION}"
+                f"{len(values)}; expected {self._embedding_dimension}"
             )
         return values
 

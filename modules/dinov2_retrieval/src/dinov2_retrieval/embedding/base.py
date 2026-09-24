@@ -1,4 +1,4 @@
-"""Base interface for future image embedders."""
+"""Base interface for image embedders."""
 
 from __future__ import annotations
 
@@ -6,6 +6,10 @@ from collections.abc import Sequence
 from typing import Protocol
 
 from PIL import Image
+
+
+class EmbeddingError(ValueError):
+    """Raised when the model cannot be loaded or returns an invalid embedding."""
 
 
 class Embedder(Protocol):
