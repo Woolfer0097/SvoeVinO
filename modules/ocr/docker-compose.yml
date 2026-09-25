@@ -1,0 +1,25 @@
+services:
+  wine-ocr:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    environment:
+      OCR_ENGINE: ${OCR_ENGINE:-paddleocr}
+      OCR_DEVICE: ${OCR_DEVICE:-cpu}
+      OCR_PADDLE_LANG: ${OCR_PADDLE_LANG:-ru}
+      OCR_EXPECTED_LANGUAGES: ${OCR_EXPECTED_LANGUAGES:-ru,en}
+      OCR_ENABLE_CENTRAL_CROP: ${OCR_ENABLE_CENTRAL_CROP:-true}
+      OCR_CENTRAL_CROP_FRACTION: ${OCR_CENTRAL_CROP_FRACTION:-0.72}
+      OCR_MAX_UPLOAD_SIZE_BYTES: ${OCR_MAX_UPLOAD_SIZE_BYTES:-15728640}
+      OCR_OUTPUT_DIR: /app/outputs
+      OCR_REPORT_RETENTION: ${OCR_REPORT_RETENTION:-false}
+    ports:
+      - "${OCR_PORT:-8000}:8000"
+    volumes:
+      - type: bind
+        source: ./outputs
+        target: /app/outputs
+    restart: "no"
