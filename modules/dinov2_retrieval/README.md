@@ -6,6 +6,9 @@
 `facebook/dinov2-small`, и ищутся ближайшие векторы эталонных фотографий в
 PostgreSQL с расширением pgvector.
 
+Для импорта исходного CSV и загрузки эталонных фотографий с vino-svoe.ru
+см. [WINE_PIPELINE.md](WINE_PIPELINE.md).
+
 Сервис отвечает только за визуальный поиск. OCR, SuperPoint/LightGlue,
 frontend, рекомендации, дообучение DINOv2 и обработка текста — внешние
 модули. Кроп, поворот и развёртку этикетки делает `wine_label_preprocessing`;

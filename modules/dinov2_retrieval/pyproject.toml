@@ -34,12 +34,24 @@ db = [
     "pgvector>=0.2.5,<1.0",
     "numpy>=1.26,<3.0",
 ]
+catalog = [
+    "httpx>=0.27,<1.0",
+]
+catalog-browser = [
+    "playwright>=1.49,<2.0",
+]
+
+[project.scripts]
+wine-pipeline = "dinov2_retrieval.wine_catalog.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
 [tool.setuptools.package-data]
-dinov2_retrieval = ["infrastructure/database/schema.sql"]
+dinov2_retrieval = [
+    "infrastructure/database/schema.sql",
+    "wine_catalog/migrations/*.sql",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

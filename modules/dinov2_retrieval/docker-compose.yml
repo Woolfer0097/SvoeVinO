@@ -65,5 +65,30 @@ services:
     # Long-running search service; `docker compose run` ignores this policy.
     restart: unless-stopped
 
+  wine-pipeline:
+    profiles: ["pipeline"]
+    build:
+      context: .
+      dockerfile: Dockerfile.wine-pipeline
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    working_dir: /app
+    env_file:
+      - .env
+    environment:
+      WINE_PHOTOS_DIR: /data/web_photos
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ../../Датасет
+        target: /input
+        read_only: true
+      - type: bind
+        source: ./data
+        target: /data
+
 volumes:
   postgres_data:
