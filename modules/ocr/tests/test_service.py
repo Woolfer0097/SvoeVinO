@@ -113,6 +113,9 @@ class OCRServiceTests(unittest.TestCase):
         self.assertIn(("year", "2022"), values)
         self.assertIn(("percentage", "13.5%"), values)
         self.assertIn(("volume", "0.75 l"), values)
+        self.assertEqual(result.candidate_name, "Wine X")
+        self.assertIn(("name", "wine x"), values)
+        self.assertEqual(result.to_dict()["candidate_name"], "Wine X")
         self.assertEqual(result.engine, "mock-engine")
 
     def test_run_ocr_on_image_warns_when_no_text_is_found(self) -> None:
@@ -123,6 +126,7 @@ class OCRServiceTests(unittest.TestCase):
         self.assertEqual(result.raw_text, "")
         self.assertEqual(result.normalized_text, "")
         self.assertEqual(result.text_blocks, [])
+        self.assertIsNone(result.candidate_name)
         self.assertEqual(result.warnings, ["No text blocks were recognized"])
 
 

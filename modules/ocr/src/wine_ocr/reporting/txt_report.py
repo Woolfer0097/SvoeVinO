@@ -38,6 +38,7 @@ def render_txt_report(result: OCRResult) -> str:
     lines.append("")
 
     grouped = _group_candidates(result.candidate_fields)
+    _append_candidate_section(lines, "Candidate name", grouped.get("name", []))
     _append_candidate_section(lines, "Candidate years", grouped.get("year", []))
     _append_candidate_section(
         lines,
@@ -49,7 +50,7 @@ def render_txt_report(result: OCRResult) -> str:
     other_fields = [
         candidate
         for candidate in result.candidate_fields
-        if candidate.field_type not in {"year", "percentage", "volume"}
+        if candidate.field_type not in {"name", "year", "percentage", "volume"}
     ]
     if other_fields:
         _append_candidate_section(lines, "Other candidates", other_fields)
@@ -80,6 +81,13 @@ def _append_candidate_section(
 
     for candidate in candidates:
         confidence = _format_confidence(candidate.confidence)
+        if candidate.field_type == "name":
+            source_variant = candidate.metadata.get("source_variant", "unknown")
+            lines.append(
+                f"- {candidate.value} "
+                f"(OCR confidence: {confidence}, source: {source_variant})"
+            )
+            continue
         lines.append(
             f"- {candidate.normalized_value} "
             f"(raw: {candidate.value}, confidence: {confidence})"

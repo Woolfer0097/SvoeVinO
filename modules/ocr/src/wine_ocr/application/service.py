@@ -11,6 +11,7 @@ from ..engine.base import OCREngine
 from ..engine.factory import create_engine
 from ..postprocessing.blocks import build_text_blocks
 from ..postprocessing.fields import extract_candidate_fields
+from ..postprocessing.names import extract_candidate_name
 from ..postprocessing.normalization import normalize_text, tokenize_text
 from ..preprocessing.images import ImageVariant, build_image_variants, decode_image
 
@@ -50,6 +51,9 @@ def run_ocr_on_image(
     normalized_text = normalize_text(raw_text)
     tokens = tokenize_text(normalized_text)
     candidate_fields = extract_candidate_fields(text_blocks, normalized_text)
+    name_field = extract_candidate_name(raw_blocks, image.size)
+    if name_field is not None:
+        candidate_fields.insert(0, name_field)
     warnings = []
     if not text_blocks:
         warnings.append("No text blocks were recognized")
@@ -60,6 +64,7 @@ def run_ocr_on_image(
         text_blocks=text_blocks,
         tokens=tokens,
         candidate_fields=candidate_fields,
+        candidate_name=name_field.value if name_field is not None else None,
         engine=getattr(active_engine, "name", active_config.engine),
         processing_time_ms=(perf_counter() - started_at) * 1000,
         warnings=warnings,

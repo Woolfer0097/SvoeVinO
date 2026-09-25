@@ -5,9 +5,9 @@ label photos.
 
 The module is intentionally catalog-agnostic. It does not decide which wine was
 photographed. It returns raw OCR text, normalized text, text blocks with
-confidence and coordinates, and simple candidate fields such as years,
-percentages, and volumes. The downstream retrieval/matching pipeline can use
-these signals to rerank visually similar candidates.
+confidence and coordinates, and candidate fields such as a provisional wine
+name, years, percentages, and volumes. The downstream retrieval/matching
+pipeline can use these signals to rerank visually similar candidates.
 
 ## Scope
 
@@ -61,9 +61,16 @@ The TXT report contains sections:
 
 - raw lines
 - normalized text
+- candidate name
 - candidate years
 - candidate percentages
 - candidate volumes
+
+`candidate_name` is selected heuristically from name-like text near the center
+of the image, preferring the central-crop OCR pass. The same phrase appears as
+`field_type="name"` in `candidate_fields` with its OCR confidence and source
+variant. It may be `null` when no plausible phrase is found; it is not a
+catalog match or a calibrated probability of the wine name.
 
 ## Local Checks
 

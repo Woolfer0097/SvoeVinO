@@ -78,16 +78,20 @@ class PostprocessingTests(unittest.TestCase):
             ],
             tokens=["wine", "x", "2023"],
             candidate_fields=[
+                CandidateField("name", "Wine X", "wine x", "Wine X", 0.9),
                 CandidateField("year", "2023", "2023", "2023", 0.8),
             ],
             engine="fake",
             processing_time_ms=12.345,
+            candidate_name="Wine X",
         )
 
         report = render_txt_report(result)
 
         self.assertIn("Raw lines", report)
         self.assertIn("Normalized text", report)
+        self.assertIn("Candidate name", report)
+        self.assertIn("- Wine X", report)
         self.assertIn("Candidate years", report)
         self.assertIn("- 2023", report)
 
