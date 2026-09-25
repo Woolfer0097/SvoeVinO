@@ -19,6 +19,12 @@ class OCREngineKey:
     engine: str
     device: str
     paddle_lang: str
+    use_doc_orientation_classify: bool
+    use_doc_unwarping: bool
+    use_textline_orientation: bool
+    text_det_limit_side_len: int | None
+    text_detection_model_name: str | None
+    text_recognition_model_name: str | None
 
     @classmethod
     def from_config(cls, config: OCRConfig) -> "OCREngineKey":
@@ -26,6 +32,12 @@ class OCREngineKey:
             engine=config.engine.strip().lower(),
             device=config.device.strip().lower(),
             paddle_lang=config.paddle_lang.strip().lower(),
+            use_doc_orientation_classify=config.use_doc_orientation_classify,
+            use_doc_unwarping=config.use_doc_unwarping,
+            use_textline_orientation=config.use_textline_orientation,
+            text_det_limit_side_len=config.text_det_limit_side_len,
+            text_detection_model_name=config.text_detection_model_name,
+            text_recognition_model_name=config.text_recognition_model_name,
         )
 
 

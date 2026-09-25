@@ -56,7 +56,7 @@ class MockEngine:
                 RecognizedTextBlock(
                     text="Wine X 2022",
                     confidence=0.8,
-                    bbox=_box(5, 5, 40, 15),
+                    bbox=_box(20, 5, 60, 15),
                     source_variant=source_variant,
                 )
             ]
@@ -117,6 +117,8 @@ class OCRServiceTests(unittest.TestCase):
         self.assertIn(("name", "wine x"), values)
         self.assertEqual(result.to_dict()["candidate_name"], "Wine X")
         self.assertEqual(result.engine, "mock-engine")
+        self.assertEqual(set(result.variant_times_ms), {"full", "central_crop"})
+        self.assertTrue(all(value >= 0 for value in result.variant_times_ms.values()))
 
     def test_run_ocr_on_image_warns_when_no_text_is_found(self) -> None:
         config = OCRConfig(enable_central_crop=False)

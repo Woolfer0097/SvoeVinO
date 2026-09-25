@@ -95,6 +95,53 @@ class CandidateNameTests(unittest.TestCase):
         self.assertIsNotNone(candidate)
         self.assertEqual(candidate.value, "MERLOT")
 
+    def test_keeps_estate_when_it_is_second_line_of_name(self) -> None:
+        blocks = [
+            _block("NOBLE", 0.99, (300, 300, 500, 360)),
+            _block("SELECTION", 0.99, (510, 300, 800, 360)),
+            _block("GOLUBITSKOE", 0.99, (300, 380, 800, 480)),
+            _block("ESTATE-", 0.97, (380, 485, 720, 570)),
+        ]
+
+        candidate = extract_candidate_name(blocks, (1100, 900))
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.value, "GOLUBITSKOE ESTATE")
+
+    def test_large_title_can_beat_small_high_confidence_auxiliary_word(self) -> None:
+        blocks = [
+            _block("3AKAT", 0.57, (200, 300, 800, 700)),
+            _block("CAMAPA", 0.99, (400, 320, 600, 370)),
+        ]
+
+        candidate = extract_candidate_name(blocks, (1000, 1000))
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.value, "3AKAT")
+
+    def test_moderately_larger_low_confidence_word_does_not_override(self) -> None:
+        blocks = [
+            _block("CAMAPA", 0.99, (400, 300, 600, 390)),
+            _block("DЕHИCOB", 0.61, (350, 400, 650, 580)),
+        ]
+
+        candidate = extract_candidate_name(blocks, (1000, 1000))
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.value, "CAMAPA")
+
+    def test_side_text_does_not_override_central_name(self) -> None:
+        blocks = [
+            _block("ФОРМУЛА", 0.96, (300, 350, 700, 470)),
+            _block("ДЕРАЦИЯ", 0.9, (800, 450, 930, 550)),
+            _block("РАЛЬНАЯ", 0.88, (810, 555, 940, 655)),
+        ]
+
+        candidate = extract_candidate_name(blocks, (1000, 1000))
+
+        self.assertIsNotNone(candidate)
+        self.assertEqual(candidate.value, "ФОРМУЛА")
+
 
 if __name__ == "__main__":
     unittest.main()

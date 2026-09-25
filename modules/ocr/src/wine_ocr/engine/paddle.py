@@ -61,32 +61,30 @@ class PaddleOCREngine:
         paddleocr = import_module("paddleocr")
         paddle_cls = getattr(paddleocr, "PaddleOCR")
 
-        base_kwargs: dict[str, Any] = {"lang": self.config.paddle_lang}
+        kwargs: dict[str, Any] = {
+            "lang": self.config.paddle_lang,
+            "use_doc_orientation_classify": self.config.use_doc_orientation_classify,
+            "use_doc_unwarping": self.config.use_doc_unwarping,
+            "use_textline_orientation": self.config.use_textline_orientation,
+        }
         if self.config.device != "auto":
-            base_kwargs["device"] = self.config.device
-
-        constructor_attempts = [
-            {**base_kwargs, "use_angle_cls": True},
-            {**base_kwargs, "use_textline_orientation": True},
-            base_kwargs,
-        ]
-        last_error: TypeError | None = None
-        for kwargs in constructor_attempts:
-            try:
-                return paddle_cls(**kwargs)
-            except TypeError as exc:
-                last_error = exc
-        raise OCREngineError("Cannot initialize PaddleOCR client") from last_error
+            kwargs["device"] = self.config.device
+        if self.config.text_det_limit_side_len is not None:
+            kwargs["text_det_limit_side_len"] = self.config.text_det_limit_side_len
+        if self.config.text_detection_model_name is not None:
+            kwargs["text_detection_model_name"] = self.config.text_detection_model_name
+        if self.config.text_recognition_model_name is not None:
+            kwargs["text_recognition_model_name"] = self.config.text_recognition_model_name
+        try:
+            return paddle_cls(**kwargs)
+        except (TypeError, ValueError) as exc:
+            raise OCREngineError("Cannot initialize PaddleOCR client") from exc
 
     def _run_client(self, client: Any, image_array: Any) -> Any:
-        if hasattr(client, "ocr"):
-            try:
-                return client.ocr(image_array, cls=True)
-            except TypeError:
-                return client.ocr(image_array)
-
         if hasattr(client, "predict"):
             return client.predict(image_array)
+        if hasattr(client, "ocr"):
+            return client.ocr(image_array)
 
         raise OCREngineError("PaddleOCR client exposes neither ocr() nor predict()")
 

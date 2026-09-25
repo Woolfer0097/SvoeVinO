@@ -106,6 +106,7 @@ class OCRResult:
     processing_time_ms: float
     warnings: list[str] = field(default_factory=list)
     candidate_name: str | None = None
+    variant_times_ms: dict[str, float] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable dictionary."""

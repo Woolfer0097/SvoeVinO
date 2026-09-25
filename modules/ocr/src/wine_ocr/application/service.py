@@ -42,8 +42,11 @@ def run_ocr_on_image(
     active_engine = engine if engine is not None else create_engine(active_config)
 
     raw_blocks: list[RecognizedTextBlock] = []
+    variant_times_ms: dict[str, float] = {}
     for variant in build_image_variants(image, active_config):
+        variant_started_at = perf_counter()
         variant_blocks = active_engine.recognize(variant.image, variant.name)
+        variant_times_ms[variant.name] = (perf_counter() - variant_started_at) * 1000
         raw_blocks.extend(_map_blocks_to_original_image(variant_blocks, variant))
 
     text_blocks = build_text_blocks(raw_blocks)
@@ -68,6 +71,7 @@ def run_ocr_on_image(
         engine=getattr(active_engine, "name", active_config.engine),
         processing_time_ms=(perf_counter() - started_at) * 1000,
         warnings=warnings,
+        variant_times_ms=variant_times_ms,
     )
 
 

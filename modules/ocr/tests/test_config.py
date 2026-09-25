@@ -21,6 +21,12 @@ class OCRConfigTests(unittest.TestCase):
                 "OCR_ENGINE": "paddleocr",
                 "OCR_DEVICE": "cpu",
                 "OCR_PADDLE_LANG": "ru",
+                "OCR_USE_DOC_ORIENTATION_CLASSIFY": "false",
+                "OCR_USE_DOC_UNWARPING": "false",
+                "OCR_USE_TEXTLINE_ORIENTATION": "true",
+                "OCR_TEXT_DET_LIMIT_SIDE_LEN": "960",
+                "OCR_TEXT_DETECTION_MODEL_NAME": "PP-OCRv5_mobile_det",
+                "OCR_TEXT_RECOGNITION_MODEL_NAME": "eslav_PP-OCRv5_mobile_rec",
                 "OCR_EXPECTED_LANGUAGES": "ru,en",
                 "OCR_ENABLE_CENTRAL_CROP": "false",
                 "OCR_CENTRAL_CROP_FRACTION": "0.5",
@@ -35,6 +41,14 @@ class OCRConfigTests(unittest.TestCase):
         self.assertEqual(config.engine, "paddleocr")
         self.assertEqual(config.device, "cpu")
         self.assertEqual(config.paddle_lang, "ru")
+        self.assertFalse(config.use_doc_orientation_classify)
+        self.assertFalse(config.use_doc_unwarping)
+        self.assertTrue(config.use_textline_orientation)
+        self.assertEqual(config.text_det_limit_side_len, 960)
+        self.assertEqual(config.text_detection_model_name, "PP-OCRv5_mobile_det")
+        self.assertEqual(
+            config.text_recognition_model_name, "eslav_PP-OCRv5_mobile_rec"
+        )
         self.assertEqual(config.expected_languages, ("ru", "en"))
         self.assertFalse(config.enable_central_crop)
         self.assertEqual(config.central_crop_fraction, 0.5)
@@ -55,6 +69,15 @@ class OCRConfigTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {"OCR_REPORT_RETENTION": "maybe"},
+            clear=True,
+        ):
+            with self.assertRaises(ConfigurationError):
+                OCRConfig.from_env()
+
+    def test_from_env_rejects_invalid_detection_size(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"OCR_TEXT_DET_LIMIT_SIDE_LEN": "0"},
             clear=True,
         ):
             with self.assertRaises(ConfigurationError):

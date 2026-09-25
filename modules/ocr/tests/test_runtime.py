@@ -48,6 +48,17 @@ class CachedOCRRuntimeTests(unittest.TestCase):
         self.assertIs(second, gpu_engine)
         self.assertEqual(create_engine.call_count, 2)
 
+    def test_get_engine_recreates_backend_when_paddle_profile_changes(self) -> None:
+        runtime = CachedOCRRuntime()
+        with patch(
+            "wine_ocr.application.runtime.create_engine",
+            side_effect=[FakeEngine(), FakeEngine()],
+        ) as create_engine:
+            runtime.get_engine(OCRConfig(use_doc_unwarping=True))
+            runtime.get_engine(OCRConfig(use_doc_unwarping=False))
+
+        self.assertEqual(create_engine.call_count, 2)
+
     def test_run_ocr_from_bytes_passes_cached_engine_to_pipeline(self) -> None:
         runtime = CachedOCRRuntime()
         engine = FakeEngine()

@@ -16,9 +16,10 @@ dependencies = [
     "Pillow>=10.0,<13.0",
     "numpy>=1.26,<3.0",
     "opencv-python-headless>=4.9,<5.0",
-    "paddleocr>=3.0,<4.0",
+    # Keep the evaluated runtime stable until a new OCR model is compared.
+    "paddleocr==3.7.0",
     # PaddlePaddle 3.3.x CPU inference breaks PP-OCRv5 with a PIR/oneDNN error.
-    "paddlepaddle>=3.2,<3.3",
+    "paddlepaddle==3.2.2",
 ]
 
 [project.optional-dependencies]

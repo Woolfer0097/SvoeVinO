@@ -18,7 +18,7 @@ GENERIC_PHRASES = (
 GENERIC_LINES = {
     "вино", "винодельня", "згу", "знмп", "сухое", "полусухое",
     "полусладкое", "сладкое", "красное", "белое", "розовое",
-    "брют", "brut", "estate", "estat",
+    "брют", "brut",
 }
 
 
@@ -30,6 +30,7 @@ class _NameOption:
     bbox: BoundingBox | None
     source_variant: str
     block_count: int
+    smallest_line_height: float
 
 
 def extract_candidate_name(
@@ -44,22 +45,36 @@ def extract_candidate_name(
 
     width, _ = image_size
     for variant in ("central_crop", "full"):
-        eligible = [
+        plausible = [
             block
             for block in blocks
             if block.source_variant == variant
             and _clean_name(block.text)
             and block.confidence is not None
-            and block.confidence >= 0.7
+            and block.confidence >= 0.55
             and _near_image_center(block.bbox, width)
+        ]
+        high_confidence = [block for block in plausible if block.confidence >= 0.7]
+        regular_height = max(
+            (_height(block.bbox) for block in high_confidence), default=0.0
+        )
+        eligible = [
+            block
+            for block in plausible
+            if block.confidence >= 0.7
+            or (
+                regular_height > 0
+                and _height(block.bbox) >= regular_height * 3
+            )
         ]
         if not eligible:
             continue
 
         max_height = max((_height(block.bbox) for block in eligible), default=1.0)
         options = [_option_for_block(block) for block in eligible]
-        for index, first in enumerate(eligible):
-            for second in eligible[index + 1 :]:
+        pairable = [block for block in high_confidence if block.confidence >= 0.75]
+        for index, first in enumerate(pairable):
+            for second in pairable[index + 1 :]:
                 if _can_join(first, second):
                     options.append(_option_for_pair(first, second))
 
@@ -97,7 +112,7 @@ def _near_image_center(box: BoundingBox | None, width: int) -> bool:
     if box is None or width <= 0:
         return True
     center_x = (box.min_x + box.max_x) / 2
-    return abs(center_x - width / 2) <= width * 0.35
+    return abs(center_x - width / 2) <= width * 0.25
 
 
 def _height(box: BoundingBox | None) -> float:
@@ -112,6 +127,7 @@ def _option_for_block(block: RecognizedTextBlock) -> _NameOption:
         bbox=block.bbox,
         source_variant=block.source_variant,
         block_count=1,
+        smallest_line_height=_height(block.bbox),
     )
 
 
@@ -177,12 +193,13 @@ def _option_for_pair(
         bbox=BoundingBox(points),
         source_variant=first.source_variant,
         block_count=2,
+        smallest_line_height=min(_height(left), _height(right)),
     )
 
 
 def _score(option: _NameOption, width: int, max_height: float) -> float:
     box = option.bbox
-    size_score = min(_height(box) / max_height, 1.0) if box is not None else 0.5
+    size_score = min(option.smallest_line_height / max_height, 1.0)
     if box is None or width <= 0:
         center_score = 0.5
     else:
@@ -194,6 +211,6 @@ def _score(option: _NameOption, width: int, max_height: float) -> float:
         1.5 * size_score
         + 1.5 * center_score
         + 1.5 * confidence
-        + 0.2 * min(letter_count / 20, 1)
-        + (0.5 if option.block_count == 2 else 0)
+        + 0.8 * min(letter_count / 20, 1)
+        + (0.8 if option.block_count == 2 else 0)
     )
