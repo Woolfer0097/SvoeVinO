@@ -1,0 +1,47 @@
+services:
+  superpoint:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    working_dir: /app
+    environment:
+      DATA_ROOT: /data
+      MAX_IMAGE_SIZE_BYTES: ${MAX_IMAGE_SIZE_BYTES:-10485760}
+      SUPPORTED_IMAGE_EXTENSIONS: ${SUPPORTED_IMAGE_EXTENSIONS:-.jpg,.jpeg,.png,.webp}
+      DEVICE: ${DEVICE:-auto}
+      MAX_NUM_KEYPOINTS: ${MAX_NUM_KEYPOINTS:-2048}
+      SUPERPOINT_RESIZE: ${SUPERPOINT_RESIZE:-1024}
+      LIGHTGLUE_DEPTH_CONFIDENCE: ${LIGHTGLUE_DEPTH_CONFIDENCE:-0.95}
+      LIGHTGLUE_WIDTH_CONFIDENCE: ${LIGHTGLUE_WIDTH_CONFIDENCE:-0.99}
+      MATCH_FILTER_THRESHOLD: ${MATCH_FILTER_THRESHOLD:-0.1}
+      MIN_MATCHES: ${MIN_MATCHES:-15}
+      MIN_INLIERS: ${MIN_INLIERS:-12}
+      MIN_INLIER_RATIO: ${MIN_INLIER_RATIO:-0.3}
+      RANSAC_REPROJ_THRESHOLD: ${RANSAC_REPROJ_THRESHOLD:-5.0}
+      RANSAC_CONFIDENCE: ${RANSAC_CONFIDENCE:-0.999}
+      TORCH_HOME: /home/app/.cache/torch
+    volumes:
+      - type: bind
+        source: ./data
+        target: /data
+        read_only: true
+      - type: bind
+        source: ./model-cache
+        target: /home/app/.cache/torch
+    command: ["--help"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import superpoint; from superpoint.config import get_data_root; get_data_root()",
+        ]
+      interval: 30s
+      timeout: 5s
+      start_period: 5s
+      retries: 3
+    restart: "no"

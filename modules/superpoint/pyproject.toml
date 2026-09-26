@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "superpoint-verification"
+version = "0.1.0"
+description = "Isolated photo verification with cvg/LightGlue SuperPoint+LightGlue"
+requires-python = ">=3.11"
+dependencies = [
+    "Pillow>=10.0,<13.0",
+    "pydantic>=2.0,<3.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0,<10.0",
+]
+ml = [
+    "torch>=2.4,<3.0",
+    "torchvision>=0.19,<1.0",
+    "numpy>=1.26,<3.0",
+    # LightGlue also pulls opencv-python. The image removes that wheel and
+    # keeps this headless build so slim containers do not need libGL.
+    "opencv-python-headless>=4.8,<5.0",
+    "lightglue @ git+https://github.com/cvg/LightGlue.git@eb42fee2d71449efb0aa5c10549752b5d75384d8",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
