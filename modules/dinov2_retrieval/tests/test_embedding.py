@@ -9,6 +9,8 @@ from PIL import Image
 from dinov2_retrieval.embedding.base import EmbeddingError
 from dinov2_retrieval.embedding.dinov2_embedder import DinoV2Embedder
 
+DIMENSION = 1536
+
 
 class FakeTensor:
     def __init__(self, values, device: str = "cpu") -> None:
@@ -113,8 +115,11 @@ class FakeModel:
     def __call__(self, **inputs):
         self.calls += 1
         self.received_inputs = inputs
-        values = [1.0] + [0.0] * 383
-        return SimpleNamespace(last_hidden_state=FakeTensor([[values]]))
+        # CLS first, then register tokens, as in DINOv2 with registers.
+        cls_token = [3.0, 4.0] + [0.0] * (DIMENSION - 2)
+        register_token = [0.0, 0.0, 1.0] + [0.0] * (DIMENSION - 3)
+        tokens = [cls_token, register_token, register_token]
+        return SimpleNamespace(last_hidden_state=FakeTensor([tokens]))
 
 
 @pytest.mark.parametrize(
@@ -136,7 +141,8 @@ def test_dinov2_embedding_dimension_normalization_and_device(
     image = Image.new("RGB", (8, 4), color=(20, 40, 60))
     embedding = embedder.embed(image)
 
-    assert len(embedding) == 384
+    assert len(embedding) == DIMENSION
+    assert embedding[:3] == pytest.approx([0.6, 0.8, 0.0])
     assert math.sqrt(sum(value * value for value in embedding)) == pytest.approx(1.0)
     assert embedder.device == expected_device
     assert model.to_device == expected_device
@@ -161,7 +167,7 @@ def test_dinov2_model_and_processor_load_once(monkeypatch) -> None:
         @classmethod
         def from_pretrained(cls, model_name):
             nonlocal processor_loads
-            assert model_name == "facebook/dinov2-small"
+            assert model_name == "facebook/dinov2-with-registers-giant"
             processor_loads += 1
             return processor
 
@@ -169,7 +175,7 @@ def test_dinov2_model_and_processor_load_once(monkeypatch) -> None:
         @classmethod
         def from_pretrained(cls, model_name):
             nonlocal model_loads
-            assert model_name == "facebook/dinov2-small"
+            assert model_name == "facebook/dinov2-with-registers-giant"
             model_loads += 1
             return model
 
@@ -234,7 +240,7 @@ def test_unexpected_dimension_raises_embedding_error(monkeypatch) -> None:
         model=FakeModel(),
     )
 
-    with pytest.raises(EmbeddingError, match="unexpected dimension: 384; expected 768"):
+    with pytest.raises(EmbeddingError, match="unexpected dimension: 1536; expected 768"):
         embedder.embed(Image.new("RGB", (8, 4)))
 
 
@@ -252,5 +258,5 @@ def test_model_load_failure_raises_embedding_error(monkeypatch) -> None:
         lambda name: SimpleNamespace(AutoImageProcessor=AutoImageProcessor),
     )
 
-    with pytest.raises(EmbeddingError, match="Cannot load model facebook/dinov2-small"):
+    with pytest.raises(EmbeddingError, match="Cannot load model facebook/dinov2-with-registers-giant"):
         DinoV2Embedder(torch_module=FakeTorch(cuda_available=False))
