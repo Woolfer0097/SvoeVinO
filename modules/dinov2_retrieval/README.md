@@ -2,12 +2,13 @@
 
 Сервис визуального поиска вина по фотографии: по снимку бутылки или
 этикетки он находит в каталоге **Top-K самых похожих разных вин**. Сравнение
-чисто визуальное: фото превращается в вектор из 384 чисел моделью
-`facebook/dinov2-small`, и ищутся ближайшие векторы эталонных фотографий в
-PostgreSQL с расширением pgvector.
+чисто визуальное: фото превращается в вектор из 1536 чисел моделью
+`facebook/dinov2-with-registers-giant` (самая крупная DINOv2, ~1,1 млрд параметров), и ищутся
+ближайшие векторы эталонных фотографий в PostgreSQL с расширением pgvector.
 
 Для импорта исходного CSV и загрузки эталонных фотографий с vino-svoe.ru
-см. [WINE_PIPELINE.md](WINE_PIPELINE.md).
+см. [WINE_PIPELINE.md](WINE_PIPELINE.md). Перенос дампа и расчёт векторов на
+другой GPU-машине описаны в [EMBEDDINGS.md](EMBEDDINGS.md).
 
 Сервис отвечает только за визуальный поиск. OCR, SuperPoint/LightGlue,
 frontend, рекомендации, дообучение DINOv2 и обработка текста — внешние
@@ -55,9 +56,10 @@ evaluate  queries.csv ──► для каждого фото: как search �
 1. Стандартный процессор модели: уменьшение до **256 px по короткой
    стороне** (бикубически), **центральный кроп 224×224**, нормализация
    средним и отклонением ImageNet.
-2. Модель ViT-S/14 (12 слоёв) режет картинку на 16×16 = 256 патчей по
-   14 px и добавляет служебный CLS-токен.
-3. Берётся **CLS-токен последнего слоя — 384 числа** — описание всей
+2. Модель ViT-g/14 (40 слоёв) режет картинку на 16×16 = 256 патчей по
+   14 px и добавляет служебный CLS-токен и 4 регистровых токена (registers
+   убирают артефакты во внимании и дают более чистые признаки).
+3. Берётся **CLS-токен последнего слоя — 1536 чисел** — описание всей
    картинки целиком.
 4. Вектор **L2-нормализуется** (длина 1), поэтому косинусное сходство
    зависит только от «направления», а не от яркости или масштаба признаков.
@@ -70,7 +72,7 @@ evaluate  queries.csv ──► для каждого фото: как search �
 Эталоны берутся из `data/reference/`: `manifest.csv`, если он есть, иначе
 фото в самой папке (одно фото — одно вино) и в подпапках (подпапка — одно
 вино). Каждый эталон записывается в `reference_images`: `wine_id`, `slug`,
-`image_uri`, `model_name`, `embedding VECTOR(384)`. Запись идёт как upsert по
+`image_uri`, `model_name`, `embedding VECTOR(1536)`. Запись идёт как upsert по
 `image_uri`: повторная индексация обновляет строку, а не создаёт дубликат.
 Сначала проверяется весь manifest; битое фото попадает в `error_details`, но
 не останавливает индексацию; ошибка базы — останавливает. С `--prune` из базы
@@ -110,7 +112,7 @@ Top-K; считается для K = 1, 5, 20 и `--top-k`. Промахи пе�
   у вертикального фото 3:4 теряется примерно по 17 % сверху и снизу, у
   9:16 — около четверти с каждой стороны. Лучше всего подавать фото,
   обрезанное по этикетке, — и эталоны, и запросы.
-- **Одна модель на базу.** Колонка — `VECTOR(384)`; сравниваются только
+- **Одна модель на базу.** Колонка — `VECTOR(1536)`; сравниваются только
   векторы с тем же `model_name`, а `image_uri` уникален, поэтому
   переиндексация другой моделью перезаписывает старые векторы.
 - **Удаляет из базы только `index --prune`.** Без флага фото, которых
@@ -165,7 +167,7 @@ src/dinov2_retrieval/
 ├── preprocessing/image_preprocessor.py
 ├── embedding/
 │   ├── base.py                        # Embedder Protocol, EmbeddingError
-│   └── dinov2_embedder.py             # DINOv2-small
+│   └── dinov2_embedder.py             # DINOv2 (по умолчанию giant with registers)
 ├── retrieval/
 │   ├── base.py                        # Retriever: search_similar
 │   └── reference_repository.py        # ReferenceRepository, RepositoryError
@@ -369,13 +371,22 @@ docker run --rm -v "$PWD/data:/data" -v "$PWD/examples:/app/examples:ro" \
 | `SUPPORTED_IMAGE_EXTENSIONS` | `.jpg,.jpeg,.png,.webp`         | разрешённые расширения (подмножество)         |
 | `HF_HOME`                    | `/home/app/.cache/huggingface`  | кэш весов Hugging Face                        |
 | `DATABASE_URL`               | обязательна для index/search/health | `postgresql://dinov2:dinov2@postgres:5432/dinov2` |
-| `DINO_MODEL_NAME`            | `facebook/dinov2-small`         | модель                                        |
-| `DINO_EMBEDDING_DIMENSION`   | `384`                           | ожидаемая размерность embedding               |
+| `DINO_MODEL_NAME`            | `facebook/dinov2-with-registers-giant` | модель                          |
+| `DINO_EMBEDDING_DIMENSION`   | `1536`                          | ожидаемая размерность embedding               |
 | `DEFAULT_TOP_K`              | `20`                            | сколько разных вин возвращает поиск           |
 | `RAW_RETRIEVAL_LIMIT`        | `100`                           | сколько ближайших фото берётся до группировки (при нехватке разных вин удваивается) |
 
-Схема БД создана под `VECTOR(384)`. Если сменить модель на другую размерность,
-`health` покажет несовпадение с колонкой `embedding`.
+Схема БД создана под `VECTOR(1536)`. Если сменить модель на другую размерность,
+`health` покажет несовпадение с колонкой `embedding`, а `index` упадёт с
+ошибкой базы. Таблица создаётся через `IF NOT EXISTS`, поэтому в базе,
+созданной раньше под `dinov2-small` (`VECTOR(384)`), колонка сама не
+поменяется: старые векторы всё равно несовместимы с новой моделью, так что
+таблицу нужно удалить и проиндексировать эталоны заново.
+
+```bash
+docker compose exec postgres psql -U dinov2 -d dinov2 -c "DROP TABLE reference_images;"
+docker compose run --rm dinov2-retrieval index --prune   # создаст VECTOR(1536) и заполнит
+```
 
 ## Запуск
 
@@ -392,14 +403,30 @@ docker compose up -d postgres
 build` занимает секунды: зависимости лежат в отдельном слое, а скачанные
 wheel-файлы кэшируются BuildKit.
 
+torch ставится **CPU-сборкой** с `download.pytorch.org/whl/cpu`: у Docker на
+этой машине нет GPU-runtime, а CUDA-сборка добавила бы ~6 ГБ библиотек
+`nvidia-*`, которыми контейнер не может воспользоваться. Для хоста с
+NVIDIA Container Toolkit соберите образ с CUDA-колёсами и выдайте контейнеру
+GPU в `docker-compose.yml`:
+
+```bash
+docker compose build --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+```
+
 `docker compose run` сам поднимает `postgres` и ждёт его готовности
 (`depends_on: condition: service_healthy`).
 
 ### Кэш модели
 
 `./model-cache` монтируется в `/home/app/.cache/huggingface` (`HF_HOME`).
-Веса `facebook/dinov2-small` скачиваются при первом запуске `embed`, `index`,
-`search` или `health` и дальше берутся из кэша.
+Веса `facebook/dinov2-with-registers-giant` (~4,5 ГБ) скачиваются при первом запуске `embed`,
+`index`, `search` или `health` и дальше берутся из кэша. Если в `.env` стоит
+`HF_HUB_OFFLINE=1`, скачивание запрещено — в первый раз запустите с
+`-e HF_HUB_OFFLINE=0`:
+
+```bash
+docker compose run --rm -e HF_HUB_OFFLINE=0 dinov2-retrieval health
+```
 
 ## Команды CLI
 
@@ -424,7 +451,7 @@ docker compose run --rm dinov2-retrieval embed --image-uri /data/queries/test.jp
 ```
 
 ```json
-{"path": "/data/queries/test.jpeg", "model": "facebook/dinov2-small", "dimension": 384,
+{"path": "/data/queries/test.jpeg", "model": "facebook/dinov2-with-registers-giant", "dimension": 1536,
  "device": "cpu", "embedding_preview": [0.0593, 0.0727, 0.1058, -0.0046, 0.0652]}
 ```
 
@@ -457,7 +484,7 @@ docker compose run --rm dinov2-retrieval index --reference-dir /data/reference
 ```json
 {
   "status": "partial",
-  "model_name": "facebook/dinov2-small",
+  "model_name": "facebook/dinov2-with-registers-giant",
   "source": "folder /data/reference",
   "total": 3, "processed": 2, "inserted": 2, "updated": 0, "skipped": 0,
   "deleted": 0, "errors": 1,
@@ -521,7 +548,7 @@ Recall@K = число запросов, где правильный wine_id по
 ```json
 {
   "status": "ok",
-  "model_name": "facebook/dinov2-small",
+  "model_name": "facebook/dinov2-with-registers-giant",
   "queries_total": 100,
   "queries_processed": 100,
   "queries_with_errors": 0,
@@ -577,8 +604,8 @@ docker compose run --rm dinov2-retrieval health
     "config": {"status": "ok", "details": {"database_url": "postgresql://dinov2:***@postgres:5432/dinov2", "...": "..."}},
     "database": {"status": "ok", "details": {"server_version": "16.x"}},
     "pgvector": {"status": "ok", "details": {"version": "0.8.x"}},
-    "reference_table": {"status": "ok", "details": {"embedding_dimension": 384, "reference_images": 50, "model_reference_images": 50}},
-    "model": {"status": "ok", "details": {"model_name": "facebook/dinov2-small", "device": "cpu", "embedding_dimension": 384}}
+    "reference_table": {"status": "ok", "details": {"embedding_dimension": 1536, "reference_images": 50, "model_reference_images": 50}},
+    "model": {"status": "ok", "details": {"model_name": "facebook/dinov2-with-registers-giant", "device": "cpu", "embedding_dimension": 1536}}
   }
 }
 ```
@@ -605,8 +632,8 @@ docker compose run --rm dinov2-retrieval health
 {
   "request_id": "request-001",
   "status": "ok",
-  "model_name": "facebook/dinov2-small",
-  "query_embedding_dimension": 384,
+  "model_name": "facebook/dinov2-with-registers-giant",
+  "query_embedding_dimension": 1536,
   "candidates": [
     {
       "wine_id": "wine-001",
@@ -670,7 +697,7 @@ CREATE TABLE IF NOT EXISTS reference_images (
     slug TEXT NOT NULL,
     image_uri TEXT NOT NULL UNIQUE,
     model_name TEXT NOT NULL,
-    embedding VECTOR(384) NOT NULL,
+    embedding VECTOR(1536) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -707,7 +734,7 @@ docker compose logs -f dinov2-retrieval
 `127.0.0.1` (порт меняется переменной `API_PORT`).
 
 Сравнение со CLI: `docker compose run ... search` каждый раз запускает новый
-контейнер и заново загружает модель (~6 с на запрос на CPU), поэтому CLI
+контейнер и заново загружает модель (~7 с на запрос на CPU), поэтому CLI
 подходит для разовых команд и Airflow, а фото от пользователей лучше
 отправлять в сервис.
 
@@ -721,6 +748,7 @@ docker compose logs -f dinov2-retrieval
 |---|---|---|
 | Поиск | `POST /search` | **загрузить фото** (кнопка выбора файла) → Top-K разных вин |
 | Поиск | `POST /search/uri` | то же для фото, которое уже лежит в `DATA_ROOT` |
+| Поиск | `GET /search/ids` | путь к фото в `DATA_ROOT` → **только список `wine_id`** 20 самых похожих вин |
 | Эталоны | `POST /index` | проиндексировать `data/reference` (тело `{}`); `"prune": true` удалит пропавшие фото |
 | Эталоны | `GET /references` | список загруженных вин и их фото (постранично) |
 | Эталоны | `GET /images` | **показать фото** по пути, например `best_image_uri` из ответа поиска |
@@ -736,7 +764,7 @@ docker compose logs -f dinov2-retrieval
    `manifest` и `reference_dir` нужны, только если эталоны лежат не в
    `data/reference`, и указывать можно только одно из них). Ответ — та же
    статистика, что у CLI (`inserted`, `updated`, `errors`…). На CPU около
-   0,4–0,6 с на фото; запрос ждёт окончания. Второй запуск индексации во
+   1,5 с на фото (giant в ~3 раза медленнее small); запрос ждёт окончания. Второй запуск индексации во
    время первого получит 409.
 2. **Поиск → `POST /search`** → выбрать файл → Execute.
 3. **Эталоны → `GET /images`** → вставить `best_image_uri` любого кандидата →
@@ -770,8 +798,8 @@ curl -s -X POST http://localhost:8000/search \
 {
   "request_id": "5c0d…",
   "status": "ok",
-  "model_name": "facebook/dinov2-small",
-  "query_embedding_dimension": 384,
+  "model_name": "facebook/dinov2-with-registers-giant",
+  "query_embedding_dimension": 1536,
   "candidates": [
     {"wine_id": "96.42_22-08-2026_21-29-43", "slug": "96.42_22-08-2026_21-29-43",
      "score": 0.954, "distance": 0.046,
@@ -794,13 +822,29 @@ curl -s -X POST http://localhost:8000/search/uri \
   -d '{"image_uri": "/data/queries/test.jpeg", "top_k": 20}'
 ```
 
+### Только id 20 самых похожих вин
+
+```bash
+curl -s 'http://localhost:8000/search/ids?image_uri=/data/queries/test.jpeg'
+```
+
+```json
+["chateau-pinot-belenkoe", "denisov-krasnaya-strelka", "68.81_05-09-2026_15-46-31"]
+```
+
+Принимает только путь к фото (абсолютный `/data/...` или относительно
+`/data`) и возвращает JSON-массив `wine_id` из `reference_images` — от самого
+похожего к наименее похожему, без повторов. Всегда до 20 вин, независимо от
+`DEFAULT_TOP_K`; меньше, если в базе меньше вин; `[]`, если эталоны не
+проиндексированы. Поиск тот же, что у `POST /search/uri`, ошибки — те же коды.
+
 ### Коды ответа
 
 | Код | Когда |
 |-----|-------|
 | 200 | успех; `"status": "no_results"`, если эталоны ещё не проиндексированы |
-| 400 | путь вне `DATA_ROOT` (`/search/uri`) |
-| 404 | файла нет (`/search/uri`) |
+| 400 | путь вне `DATA_ROOT` (`/search/uri`, `/search/ids`) |
+| 404 | файла нет (`/search/uri`, `/search/ids`) |
 | 413 | файл больше `MAX_IMAGE_SIZE_BYTES` |
 | 415 | неподдерживаемый формат |
 | 400 | ошибка в `manifest.csv` / `queries.csv` или файла нет (`/index`, `/evaluate`) |

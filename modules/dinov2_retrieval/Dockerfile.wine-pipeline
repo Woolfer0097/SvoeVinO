@@ -15,6 +15,7 @@ RUN groupadd --gid "${APP_GID}" app \
 COPY pyproject.toml ./
 COPY src ./src
 COPY tests ./tests
+COPY database ./database
 RUN pip install --no-cache-dir '.[dev,db,catalog]'
 
 USER app

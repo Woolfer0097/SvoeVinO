@@ -381,7 +381,15 @@ def _save_success(connection, slug: str, wine: WinePage, relative_photo: str) ->
             """
             UPDATE wines SET
                 web_photo = %(web_photo)s,
-                web_photo_url = %(web_photo_url)s
+                web_photo_url = %(web_photo_url)s,
+                web_photo_embedding = CASE WHEN
+                    web_photo IS DISTINCT FROM %(web_photo)s OR
+                    web_photo_url IS DISTINCT FROM %(web_photo_url)s
+                    THEN NULL ELSE web_photo_embedding END,
+                web_photo_embedding_model = CASE WHEN
+                    web_photo IS DISTINCT FROM %(web_photo)s OR
+                    web_photo_url IS DISTINCT FROM %(web_photo_url)s
+                    THEN NULL ELSE web_photo_embedding_model END
             WHERE slug = %(slug)s
             """,
             {

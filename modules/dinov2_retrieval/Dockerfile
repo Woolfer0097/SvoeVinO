@@ -11,6 +11,13 @@ WORKDIR /app
 
 RUN python -m venv /opt/venv
 
+# Docker here has no GPU runtime, so torch comes from the CPU-only index: the
+# CUDA build adds ~6 GB of nvidia-* wheels the container cannot use. For a GPU
+# host: --build-arg TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
+# Pillow (torchvision's only dependency missing there in practice: its index
+# page is huge and times out) is installed from PyPI first.
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+
 # Dependencies are installed from a stub package first so that code changes
 # do not reinstall torch/transformers on every rebuild. The pip cache mount
 # keeps downloaded wheels when pyproject.toml itself changes.
@@ -18,6 +25,8 @@ COPY pyproject.toml ./
 RUN --mount=type=cache,target=/root/.cache/pip \
     mkdir -p src/dinov2_retrieval \
     && touch src/dinov2_retrieval/__init__.py \
+    && pip install 'Pillow>=10.0,<13.0' \
+    && pip install --index-url "${TORCH_INDEX_URL}" 'torch>=2.7,<3.0' 'torchvision>=0.22,<1.0' \
     && pip install '.[dev,ml,db,api]'
 
 COPY src ./src
@@ -45,7 +54,7 @@ ENV DATA_ROOT=/data
 
 EXPOSE 8000
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=5s --start-period=300s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"
 
 ENTRYPOINT ["sh", "/usr/local/bin/dinov2-retrieval-entrypoint.sh"]

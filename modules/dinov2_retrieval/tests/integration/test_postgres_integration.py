@@ -28,6 +28,7 @@ pytest.importorskip("pgvector")
 from dinov2_retrieval.application.evaluate_retrieval import evaluate_retrieval
 from dinov2_retrieval.application.index_reference_images import index_reference_images
 from dinov2_retrieval.application.search_similar_wines import search_similar_wines
+from dinov2_retrieval.config import get_dino_embedding_dimension, get_dino_model_name
 from dinov2_retrieval.contracts import (
     EvaluationQuery,
     ReferenceImage,
@@ -58,8 +59,8 @@ def repository():
         yield repository
 
 
-def unit_vector(index: int, dimension: int = 384) -> list[float]:
-    values = [0.0] * dimension
+def unit_vector(index: int) -> list[float]:
+    values = [0.0] * get_dino_embedding_dimension()
     values[index] = 1.0
     return values
 
@@ -70,11 +71,11 @@ def delete_rows(where: str, value: str) -> None:
 
 
 def test_schema_matches_configuration() -> None:
-    inspection = inspect_database("facebook/dinov2-small")
+    inspection = inspect_database(get_dino_model_name())
 
     assert inspection.pgvector_version
     assert inspection.table_exists
-    assert inspection.embedding_dimension == 384
+    assert inspection.embedding_dimension == get_dino_embedding_dimension()
 
 
 def test_upsert_count_and_cosine_search(repository: PostgresReferenceRepository) -> None:
@@ -168,7 +169,7 @@ def test_index_and_search_with_real_model(tmp_path: Path) -> None:
 
     assert (first.status, first.inserted, first.updated) == ("ok", 3, 0)
     assert (second.inserted, second.updated) == (0, 3)
-    assert response.query_embedding_dimension == 384
+    assert response.query_embedding_dimension == get_dino_embedding_dimension()
     assert response.candidates[0].wine_id == "it-wine-1"
     assert response.candidates[0].score == pytest.approx(1.0, abs=1e-4)
     assert (evaluation.status, evaluation.queries_processed) == ("ok", 3)

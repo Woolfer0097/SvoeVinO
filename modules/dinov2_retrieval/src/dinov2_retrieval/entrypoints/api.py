@@ -82,6 +82,8 @@ ERROR_STATUS_CODES: dict[type[Exception], int] = {
 RepositoryFactory = Callable[[], ReferenceRepository]
 WARMUP_IMAGE_SIZE = (224, 224)
 PREVIEW_JPEG_QUALITY = 85
+# GET /search/ids always answers with this many wines, whatever DEFAULT_TOP_K is.
+ID_SEARCH_TOP_K = 20
 
 TAG_SEARCH = "Поиск"
 TAG_REFERENCES = "Эталоны"
@@ -118,13 +120,14 @@ SWAGGER_UI_PARAMETERS = {
 }
 
 DESCRIPTION = """
-Визуальный поиск вина по фотографии на модели `facebook/dinov2-small`
-(загружается один раз при старте сервиса) и PostgreSQL/pgvector.
+Визуальный поиск вина по фотографии на модели
+`facebook/dinov2-with-registers-giant` (загружается один раз при старте
+сервиса) и PostgreSQL/pgvector.
 
 **Быстрая проверка:**
 
 1. **Эталоны → `POST /index`** — `Execute` с телом `{}` проиндексирует фото из
-   `data/reference` (на CPU около 0,6 с на фото).
+   `data/reference` (на CPU около 1,5 с на фото).
 2. **Поиск → `POST /search`** — выберите файл фото и нажмите `Execute`.
 3. **Эталоны → `GET /images`** — вставьте `best_image_uri` из ответа поиска,
    чтобы посмотреть найденное фото.
@@ -339,6 +342,28 @@ def create_app(
 
         return _search(body.image_uri, body.top_k, body.request_id, image_storage)
 
+    @app.get(
+        "/search/ids",
+        tags=[TAG_SEARCH],
+        response_model=list[str],
+        summary="Только wine_id 20 самых похожих вин для фото из DATA_ROOT",
+    )
+    def search_ids(
+        image_uri: str = Query(
+            min_length=1,
+            description="путь к фото внутри контейнера: `/data/queries/test.jpeg` "
+            "или относительно /data: `queries/test.jpeg`",
+            examples=["/data/queries/test.jpeg"],
+        ),
+    ) -> list[str]:
+        """Тот же поиск, что `POST /search/uri`, но в ответе только список
+        `wine_id` (как в `reference_images`), от самого похожего вина к
+        наименее похожему. Всегда до 20 разных вин; меньше — если в базе
+        меньше вин, `[]` — если эталоны не проиндексированы."""
+
+        response = _search(image_uri, ID_SEARCH_TOP_K, None, image_storage)
+        return [candidate.wine_id for candidate in response.candidates]
+
     # --- Эталоны -------------------------------------------------------------
 
     @app.post(
@@ -355,7 +380,7 @@ def create_app(
 
         Повторный запуск обновляет записи, а не создаёт дубликаты;
         `"prune": true` удаляет из базы фото, которых больше нет в источнике.
-        Запрос ждёт окончания индексации (на CPU около 0,6 с на фото); новые
+        Запрос ждёт окончания индексации (на CPU около 1,5 с на фото); новые
         эталоны сразу доступны поиску.
         """
 

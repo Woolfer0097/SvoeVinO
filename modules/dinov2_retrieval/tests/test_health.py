@@ -14,17 +14,17 @@ HEALTHY_DATABASE = DatabaseInspection(
     server_version="16.4",
     pgvector_version="0.8.0",
     table_exists=True,
-    embedding_dimension=384,
+    embedding_dimension=1536,
     reference_count=5,
     model_reference_count=5,
 )
 
 
 class FakeEmbedder:
-    model_name = "facebook/dinov2-small"
+    model_name = "facebook/dinov2-with-registers-giant"
     device = "cpu"
 
-    def __init__(self, dimension: int = 384) -> None:
+    def __init__(self, dimension: int = 1536) -> None:
         self.dimension = dimension
 
     def embed(self, image: Image.Image) -> list[float]:
@@ -64,13 +64,13 @@ def test_everything_ok() -> None:
     ]
     config = report.checks["config"].details
     assert config["database_url"] == "postgresql://dinov2:***@postgres:5432/dinov2"
-    assert config["dino_embedding_dimension"] == 384
+    assert config["dino_embedding_dimension"] == 1536
     assert report.checks["reference_table"].details == {
-        "embedding_dimension": 384,
+        "embedding_dimension": 1536,
         "reference_images": 5,
         "model_reference_images": 5,
     }
-    assert report.checks["model"].details["embedding_dimension"] == 384
+    assert report.checks["model"].details["embedding_dimension"] == 1536
 
 
 def test_invalid_config_skips_other_checks(monkeypatch: pytest.MonkeyPatch) -> None:
