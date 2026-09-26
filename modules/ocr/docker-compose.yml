@@ -25,6 +25,9 @@ services:
       OCR_MAX_UPLOAD_SIZE_BYTES: ${OCR_MAX_UPLOAD_SIZE_BYTES:-15728640}
       OCR_OUTPUT_DIR: /app/outputs
       OCR_REPORT_RETENTION: ${OCR_REPORT_RETENTION:-false}
+      TEXT_EMBEDDING_MODEL_NAME: ${TEXT_EMBEDDING_MODEL_NAME:-intfloat/multilingual-e5-base}
+      TEXT_EMBEDDING_DEVICE: ${TEXT_EMBEDDING_DEVICE:-auto}
+      DATABASE_URL: ${DATABASE_URL:-}
     ports:
       - "${OCR_PORT:-8000}:8000"
     volumes:

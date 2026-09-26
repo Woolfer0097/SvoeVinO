@@ -6,9 +6,12 @@ from pathlib import Path
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
+from starlette.concurrency import run_in_threadpool
 
+from ..application.matching import match_image_from_bytes
 from ..application.runtime import CachedOCRRuntime
 from ..config import OCRConfig
+from ..embedding_comparison import EmbeddingComparisonError, PostgresEmbeddingRepository
 from ..exceptions import (
     ConfigurationError,
     ImageDecodeError,
@@ -16,9 +19,12 @@ from ..exceptions import (
     OCRError,
 )
 from ..reporting import render_txt_report, safe_report_filename
+from ..text_processing import E5TextEmbedder, TextEmbeddingError
 
 app = FastAPI(title="Wine OCR", version="0.1.0")
 ocr_runtime = CachedOCRRuntime()
+text_embedder = E5TextEmbedder()
+embedding_repository = PostgresEmbeddingRepository()
 
 
 @app.get("/health")
@@ -53,6 +59,36 @@ async def recognize_image_txt(file: UploadFile = File(...)) -> PlainTextResponse
         media_type="text/plain; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@app.post("/match")
+async def match_image(file: UploadFile = File(...)) -> JSONResponse:
+    """Recognize a photo, embed all OCR text, and return ten catalog IDs."""
+
+    try:
+        config = OCRConfig.from_env()
+        data = await file.read()
+        matches = await run_in_threadpool(
+            match_image_from_bytes,
+            data,
+            config=config,
+            ocr_runtime=ocr_runtime,
+            text_embedder=text_embedder,
+            repository=embedding_repository,
+        )
+    except ConfigurationError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    except ImageDecodeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except OCREngineError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except TextEmbeddingError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except EmbeddingComparisonError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except OCRError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+    return JSONResponse(matches)
 
 
 async def _process_upload(

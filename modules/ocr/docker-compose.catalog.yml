@@ -1,0 +1,17 @@
+services:
+  wine-ocr:
+    environment:
+      HF_HOME: /home/app/.cache/huggingface
+    networks:
+      - default
+      - catalog
+    volumes:
+      - ocr_hf_cache:/home/app/.cache/huggingface
+
+networks:
+  catalog:
+    external: true
+    name: dinov2_retrieval_default
+
+volumes:
+  ocr_hf_cache:

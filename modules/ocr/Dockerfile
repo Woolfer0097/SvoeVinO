@@ -22,7 +22,11 @@ RUN python -m venv /opt/venv
 COPY pyproject.toml README.md ./
 COPY src ./src
 
-RUN pip install --no-cache-dir .
+# The OCR container runs on CPU. Install the CPU wheel before resolving the
+# matching extra so pip does not pull CUDA libraries into this image.
+RUN pip install --no-cache-dir 'torch==2.8.0' \
+    --index-url https://download.pytorch.org/whl/cpu
+RUN pip install --no-cache-dir '.[matching]'
 
 ARG APP_UID=1000
 ARG APP_GID=1000
@@ -32,6 +36,9 @@ RUN groupadd --gid "${APP_GID}" app \
         --create-home --home-dir /home/app --shell /usr/sbin/nologin app \
     && mkdir -p /app/outputs \
     && chown -R app:app /app /opt/venv
+
+RUN mkdir -p /home/app/.cache/huggingface \
+    && chown -R app:app /home/app/.cache
 
 USER app
 

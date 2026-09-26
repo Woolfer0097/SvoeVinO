@@ -1,13 +1,15 @@
 # Wine OCR
 
-Isolated OCR service for extracting text signals from Russian wine bottle or
-label photos.
+OCR service for Russian wine bottle or label photos. The core recognizer extracts
+text signals; an optional matching path searches catalog text embeddings.
 
-The module is intentionally catalog-agnostic. It does not decide which wine was
-photographed. It returns raw OCR text, normalized text, text blocks with
+The core recognizer remains catalog-agnostic. It returns raw OCR text, normalized
+text, text blocks with
 confidence and coordinates, and candidate fields such as a provisional wine
 name, years, percentages, and volumes. The downstream retrieval/matching
-pipeline can use these signals to rerank visually similar candidates.
+pipeline can use these signals to rerank visually similar candidates. The
+separate `/match` path uses the existing PostgreSQL catalog to return candidate
+IDs without changing the recognizer's output.
 
 ## Scope
 
@@ -41,6 +43,23 @@ Start the service:
 docker compose up --build
 ```
 
+To run `/match` against the restored wine catalog, start `postgres` from
+`modules/dinov2_retrieval` first. In this module, copy `.env.example` to `.env`,
+set `DATABASE_URL=postgresql://dinov2:dinov2@postgres:5432/wine_catalog` and
+`OCR_PORT=127.0.0.1:8001`, then start OCR with the catalog network override:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.catalog.yml up -d --build
+```
+
+`docker-compose.catalog.yml` joins the retrieval Compose network
+`dinov2_retrieval_default`. If the retrieval project uses a different Compose
+project name, update the external network name in that file. With this setup,
+OCR is available at `http://localhost:8001`; the ordinary standalone command
+above still works without the catalog network. The catalog override also keeps
+downloaded Hugging Face model files in a Docker volume across OCR container
+recreation.
+
 JSON response with structured OCR result and a TXT report:
 
 ```bash
@@ -56,6 +75,56 @@ Download a plain TXT report:
 ```bash
 curl -F "file=@label.jpg" http://localhost:8000/ocr/txt -o ocr_report.txt
 ```
+
+Find the ten closest catalog rows from the same uploaded photo:
+
+```bash
+curl -F "file=@label.jpg" http://localhost:8000/match
+```
+
+`/match` runs the existing OCR pipeline, converts its complete
+`normalized_text` into a multilingual E5 query vector, and compares that vector
+with `wines.description_text_embedding` in PostgreSQL. It returns only the
+catalog row IDs and scores:
+
+```json
+{"top_10": {"123": 0.94, "456": 0.88}}
+```
+
+The example shows two entries for brevity; the service returns up to ten. JSON
+object keys are strings even though `wines.id` is a numeric PostgreSQL ID. The
+score is `1 - cosine_distance / 2`, constrained to `[0, 1]`. It orders results;
+it is not a calibrated probability. No recognized text or TXT report is included
+in this endpoint. An image with no recognized text returns `{"top_10": {}}`.
+The existing `/ocr` and `/ocr/txt` endpoints remain available for manual review.
+
+The new stages are separate packages under `wine_ocr`: `text_processing` handles
+only text-to-vector conversion, while `embedding_comparison` performs a read-only
+PostgreSQL search and creates the final response. `text_processing` uses
+`intfloat/multilingual-e5-base` by default, with the same mean pooling and L2
+normalization as the catalog generator. Catalog entries use `passage: ` and OCR
+queries use `query: `. Text longer than the model's 512-token input is split at
+word boundaries; all chunks contribute to one normalized query vector. The
+matching code does not import the DINOv2 package or compare text vectors with
+image vectors.
+
+`/match` requires the `matching` dependency extra, which the OCR Dockerfile
+installs. Configure `DATABASE_URL` for a PostgreSQL database with pgvector and
+populated `wines.description_text_embedding` rows. The query selects only rows
+whose `description_text_embedding_model` equals the query model and whose vector
+dimension matches. It never creates tables or changes catalog records. Set
+`TEXT_EMBEDDING_MODEL_NAME` only when the catalog has vectors from that exact
+model; `TEXT_EMBEDDING_DEVICE` accepts `auto`, `cpu`, or `cuda`. Loading the E5
+model and connecting to PostgreSQL happen on the first matching request, not
+during package import or `/health`. If the model or database is unavailable,
+`/match` returns HTTP 503.
+
+The OCR and retrieval Compose projects are separate. Before an integrated run,
+give the OCR container a reachable `DATABASE_URL` and, if both HTTP services
+run on one host, select different published ports (for example `OCR_PORT=8001`).
+The existing retrieval service's `reference_images.wine_id` is a string and is
+not automatically linked to the numeric `wines.id` returned here. Combining
+visual and text rankings therefore needs an explicit ID mapping later.
 
 The TXT report contains sections:
 
