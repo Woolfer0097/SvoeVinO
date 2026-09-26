@@ -1,8 +1,8 @@
 # Wine OCR
 
-Status: 26 September 2026. The current OCR profile is the quality baseline
-(`test8`). The end-to-end catalog matching path has been exercised with a
-populated PostgreSQL database on all 15 review photos (`test12` and `test13`).
+The module includes lightweight tests and manual-review tools. Photos,
+annotations, and generated model responses are local inputs and are not needed
+in Git for installation or unit tests.
 
 OCR service for Russian wine bottle or label photos. The core recognizer extracts
 text signals; an optional matching path searches catalog text embeddings.
@@ -49,7 +49,8 @@ First use may download PaddleOCR or E5 weights; inference itself is local.
 ## REST API
 
 Start the standalone OCR service from `modules/ocr` (the default published port
-is `8000`, unless `.env` sets `OCR_PORT`):
+is `8000`, unless `.env` sets `OCR_PORT`). Include `outputs/.gitkeep` in the
+commit so the bind-mounted output directory exists in a fresh checkout:
 
 ```bash
 docker compose up --build
@@ -57,7 +58,9 @@ docker compose up --build
 
 To run `/match` against the catalog, start `postgres` from
 `modules/dinov2_retrieval` first and ensure its `wines` table contains text
-embeddings. In this module, copy `.env.example` to an untracked `.env`, set a
+embeddings (see [the retrieval setup](../dinov2_retrieval/README.md); starting
+an empty PostgreSQL instance is insufficient). In this module, copy
+`.env.example` to an untracked `.env`, set a
 real `DATABASE_URL` for the reachable PostgreSQL service (for example,
 `postgresql://USER:PASSWORD@postgres:5432/wine_catalog`) and set
 `OCR_PORT=127.0.0.1:8001`. Then start OCR with the catalog network override:
@@ -175,9 +178,9 @@ The service exposes the installed PaddleOCR 3.x pipeline options as environment
 variables. The evaluated default disables whole-image document orientation,
 keeps document unwarping and text-line orientation enabled, uses PaddleOCR's
 default detector and recognizer, and recognizes both image variants. This
-profile improved the annotated text on the current 15 photos without reducing
-strict matches for any annotated phrase. The previously used all-enabled
-profile remains available by setting `OCR_USE_DOC_ORIENTATION_CLASSIFY=true`.
+profile was selected after local comparison on annotated photos. The
+previously used all-enabled profile remains available by setting
+`OCR_USE_DOC_ORIENTATION_CLASSIFY=true`.
 PaddleOCR 3.7.0 and PaddlePaddle 3.2.2 are pinned for reproducible comparisons;
 the OCR model and weights can still be changed in a later experiment.
 
@@ -203,89 +206,61 @@ created container may need to download them again. `docker stop` preserves the
 container and that cache; `docker compose down` removes the container. The E5
 cache is persisted separately by `docker-compose.catalog.yml`.
 
-## Manual review evaluation
+## Manual review with your own photos
 
-`scripts/run_manual_review.py` writes a new `outputs/testN` folder with copied
-`imageN` files, `imageN_output.json`/`imageN_output.txt` responses, and a
-source-name manifest. The expected text file remains outside the OCR module
-and is read-only during evaluation. With the Docker service running on port
-`8001`, use the current local photo set like this:
+The tracked `tests/fixtures/manual_review/photos/README.txt` keeps an empty
+input directory in a fresh checkout. Put your JPEG, PNG, WebP, BMP, or TIFF
+photos there, or pass another directory as the first argument to a run tool.
+The run tools sort filenames case-insensitively, copy images into a new
+`outputs/testN` directory as `image1`, `image2`, and so on, and record the
+original names in `manifest.json`. The marker TXT is ignored by the tools.
+
+Start the OCR service and, from `modules/ocr`, run:
 
 ```bash
-python scripts/run_manual_review.py ../../images/test_images \
-  --url http://127.0.0.1:8001/ocr
-python scripts/evaluate_manual_review.py \
-  "../../images/test_images/correct text.txt" outputs/testN \
-  --label chosen-profile
+python tests/run_manual_review.py --url http://127.0.0.1:8001/ocr
 ```
 
-Replace `testN` with the newly printed folder name. The second command saves
-`outputs/testN/evaluation.json`. It compares `candidate_name`,
-the complete normalized-text phrase, each annotated year, and each `other`
-phrase. Matching uses Unicode NFKC, case folding, whitespace normalization,
-and word boundaries. It deliberately does not correct Latin/Cyrillic lookalikes
-or approximate spellings, so its counts are strict regression indicators rather
-than a complete measure of OCR quality. Review the individual JSON/TXT outputs
-alongside the evaluation report before accepting a new profile.
+Use port `8000` if running the standalone default. The command creates
+`imageN_output.json` and `imageN_output.txt` for each photo. `outputs/testN`
+is local and Git-ignored. The user can inspect these files without an
+annotation file.
 
-The local `scripts/` and `outputs/` directories are ignored by Git. Confirm
-that the review scripts exist before using these commands in a clean clone;
-past `testN` results are local artifacts, not committed benchmarks. In Windows
-PowerShell, use one-line commands or PowerShell's backtick continuation instead
-of the Bash `\` shown above.
+To evaluate against known text, copy
+`tests/fixtures/manual_review/correct_text.example.txt` to
+`tests/fixtures/manual_review/correct_text.txt` and fill in `name`, optional
+`years`, and `other` for **every** `imageN` in the manifest. The real
+annotation file is Git-ignored. Then run:
 
-On the current 15 manually annotated photos, the quality experiments produced:
+```bash
+python tests/evaluate_manual_review.py tests/fixtures/manual_review/correct_text.txt outputs/testN --label chosen-profile
+python tests/diagnose_manual_review.py outputs/testN
+```
 
-| Run | Change from `test8` | Exact name candidate | Complete name in text | Expected years | `other` phrases |
-| --- | --- | ---: | ---: | ---: | ---: |
-| `test8` | Current default | 7/15 | 6/15 | 7/8 | 16/32 |
-| `test9` | Cyrillic PP-OCRv5 recognizer | 4/15 | 6/15 | 8/8 | 17/32 |
-| `test10` | PP-OCRv6 medium detector | 1/15 | 3/15 | 8/8 | 11/32 |
-| `test11` | PP-OCRv5 box threshold 0.4 | 5/15 | 6/15 | 6/8 | 15/32 |
+The evaluator writes `outputs/testN/evaluation.json`, and the diagnostic tool
+writes `diagnostics.json`. They compare selected phrases strictly after Unicode
+normalization; their counts are not a complete OCR accuracy measure. These
+commands require an OCR run with `imageN_output.json` files; they cannot
+evaluate a `/match`-only run.
 
-These counts are strict matches against selected phrases, not CER or general
-accuracy estimates. The faster alternative recognizer and detector both lost
-previously correct names. The lower box threshold recovered `пет-нат` in the
-text of `image10`, but lost two correct name candidates and one expected year.
-The default profile therefore remains unchanged. A 0.5 threshold probe on four
-key photos also lost a correct name and failed to recover `пет-нат`, so it was
-not run on the complete set.
+With a populated PostgreSQL catalog, test the matching endpoint separately:
 
-## Catalog matching review
+```bash
+python tests/run_match_review.py --url http://127.0.0.1:8001/match --expected-count 10
+```
 
-The integrated `/match` path was run against 4,147 `wines` rows; all 4,147
-had `intfloat/multilingual-e5-base` text embeddings of dimension 768. In both
-`test12` (original query) and `test13` (candidate-name emphasis and limited OCR
-lookalike repair), all 15 photos returned HTTP 200 and ten catalog IDs with
-scores in `[0, 1]`. The database row count stayed unchanged. `/health`,
-`/ocr`, and `/ocr/txt` also responded successfully, and an invalid image sent
-to `/match` returned HTTP 400. These are results of the completed runs, not a
-promise that the currently stopped containers are available.
+That tool saves `imageN_match_output.json` in a new `outputs/testN` folder and
+checks response structure, numeric IDs, score range, and rank order. It does
+not generate TXT. Omit `--expected-count 10` for a smaller catalog. Both run
+tools accept `--resume outputs/testN` after an interrupted run. Historical
+`outputs/testN` results and local `tests/fixtures/baselines/` are deliberately
+excluded from Git.
 
-The photo annotations contain important label words but no authoritative
-`image → wines.id` mapping. A provisional manual mapping found a plausible
-catalog row in the top ten for 5 of 13 assessable photos in `test12` and 8 of
-13 in `test13`; `image8` and `image13` did not have an established exact catalog
-row. The query change moved `image1`, `image11`, and `image12` from outside the
-top ten to rank 1 without an observed rank regression on the 13 assessable
-photos. This is diagnostic evidence, not verified SKU accuracy or a measured
-Recall@10. Likely rows for `image3`, `image5`, `image6`, `image10`, and
-`image15` remained outside the top ten.
-
-Catalog duplicates matter: a top ten contained an average of only 5.07 unique
-name-and-winery pairs, because different IDs can describe the same product.
-`/match` currently returns ten distinct row IDs, not ten distinct wines. It
-does not silently discard duplicates. Warm end-to-end requests averaged
-53.29 s in `test12` and 54.00 s in `test13`; the small difference does not
-establish a speed trend. The cold first `test13` request took 111.57 s and
-depends on cache state. Most measured time was in OCR.
-
-For the next quality step, first annotate the acceptable `wines.id` values for
-each photo and define how duplicate catalog rows count. Then measure exact-ID
-Recall@1/10 and compare the current E5 ranking with a wider candidate pool
-followed by careful reranking using recognized name, year, winery, and other
-words. Check any new rule on held-out photos. GPU or OCR speed work can follow
-once matching quality can be measured reliably.
+No historical output file is required for the API, unit tests, or a new manual
+run. `outputs/.gitkeep` is the only tracked file needed there to preserve the
+bind-mount directory. The tests use small synthetic data, so a clean checkout
+passes unit tests before anyone supplies photos. In Windows PowerShell, use
+`curl.exe` for the direct HTTP examples above if `curl` is an alias.
 
 ## Local Checks
 

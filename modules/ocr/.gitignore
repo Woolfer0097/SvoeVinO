@@ -1,4 +1,8 @@
 __pycache__/
 *.py[cod]
-outputs/
-scripts/
+outputs/*
+!outputs/.gitkeep
+tests/fixtures/baselines/
+tests/fixtures/manual_review/photos/*
+!tests/fixtures/manual_review/photos/README.txt
+tests/fixtures/manual_review/correct_text.txt
