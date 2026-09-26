@@ -5,10 +5,11 @@ from __future__ import annotations
 from collections import Counter
 from pathlib import Path
 
+from ..config import DEFAULT_DINO_MODEL_NAME
 from .migrations import apply_migrations
 from .photo_manifest import read_photo_manifest
 
-DEFAULT_IMAGE_MODEL = "facebook/dinov2-small"
+DEFAULT_IMAGE_MODEL = DEFAULT_DINO_MODEL_NAME
 DEFAULT_TEXT_MODEL = "intfloat/multilingual-e5-base"
 KINDS = ("dataset_photo", "web_photo", "description_text")
 FIELDS = (

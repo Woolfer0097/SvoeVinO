@@ -19,8 +19,8 @@ DATABASE_URL = "postgresql://dinov2:secret@postgres:5432/dinov2"
 
 
 def test_retrieval_settings_have_defaults() -> None:
-    assert get_dino_model_name() == "facebook/dinov2-small"
-    assert get_dino_embedding_dimension() == 384
+    assert get_dino_model_name() == "facebook/dinov2-with-registers-giant"
+    assert get_dino_embedding_dimension() == 1536
     assert get_default_top_k() == 20
     assert get_raw_retrieval_limit() == 100
 
@@ -91,7 +91,7 @@ def test_load_settings_reads_everything(
 
     assert settings.data_root == tmp_path.resolve()
     assert settings.database_url == DATABASE_URL
-    assert settings.dino_model_name == "facebook/dinov2-small"
-    assert settings.dino_embedding_dimension == 384
+    assert settings.dino_model_name == "facebook/dinov2-with-registers-giant"
+    assert settings.dino_embedding_dimension == 1536
     assert settings.default_top_k == 20
     assert settings.raw_retrieval_limit == 100

@@ -1,0 +1,60 @@
+services:
+  superpoint:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    working_dir: /app
+    environment:
+      DATA_ROOT: /data
+      MAX_IMAGE_SIZE_BYTES: ${MAX_IMAGE_SIZE_BYTES:-10485760}
+      SUPPORTED_IMAGE_EXTENSIONS: ${SUPPORTED_IMAGE_EXTENSIONS:-.jpg,.jpeg,.png,.webp}
+      DEVICE: ${DEVICE:-auto}
+      MAX_NUM_KEYPOINTS: ${MAX_NUM_KEYPOINTS:-2048}
+      SUPERPOINT_RESIZE: ${SUPERPOINT_RESIZE:-1024}
+      LIGHTGLUE_DEPTH_CONFIDENCE: ${LIGHTGLUE_DEPTH_CONFIDENCE:-0.95}
+      LIGHTGLUE_WIDTH_CONFIDENCE: ${LIGHTGLUE_WIDTH_CONFIDENCE:-0.99}
+      MATCH_FILTER_THRESHOLD: ${MATCH_FILTER_THRESHOLD:-0.1}
+      MIN_MATCHES: ${MIN_MATCHES:-15}
+      MIN_INLIERS: ${MIN_INLIERS:-12}
+      MIN_INLIER_RATIO: ${MIN_INLIER_RATIO:-0.3}
+      RANSAC_REPROJ_THRESHOLD: ${RANSAC_REPROJ_THRESHOLD:-5.0}
+      RANSAC_CONFIDENCE: ${RANSAC_CONFIDENCE:-0.999}
+      TORCH_HOME: /home/app/.cache/torch
+      PORT: "8000"
+      # Host Postgres is 127.0.0.1:5433. Inside this container that address is
+      # the container itself, so the default reaches the host port instead.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://dinov2:dinov2@host.docker.internal:5433/dinov2}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    ports:
+      - "127.0.0.1:${API_PORT:-8001}:8000"
+    volumes:
+      # image_uri in reference_images is /data/reference/<file> inside the
+      # DINOv2 data root. Mount that root directly: a nested mount onto a
+      # read-only /data fails unless the mountpoint already exists.
+      - type: bind
+        source: ../dinov2_retrieval/data
+        target: /data
+        read_only: true
+      - type: bind
+        source: ./model-cache
+        target: /home/app/.cache/torch
+    command: ["serve"]
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8000') + '/health', timeout=3)",
+        ]
+      interval: 30s
+      timeout: 5s
+      # The matcher is loaded (and on the first start downloaded) before serving.
+      start_period: 120s
+      retries: 3
+    # Long-running verification service; `docker compose run` ignores this policy.
+    restart: unless-stopped

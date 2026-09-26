@@ -366,6 +366,69 @@ def test_search_by_uri_errors(search_client: TestClient) -> None:
     ).status_code == 422
 
 
+def test_search_ids_returns_only_top_20_wine_ids(
+    search_client: TestClient,
+    repository: FakeRepository,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("DEFAULT_TOP_K", "3")
+
+    response = search_client.get(
+        "/search/ids", params={"image_uri": str(tmp_path / "queries/test.jpg")}
+    )
+
+    assert response.status_code == 200
+    assert response.json() == [f"wine-{index:03d}" for index in range(20)]
+    assert (repository.opened, repository.closed) == (1, 1)
+    assert repository.upserts == []
+
+
+def test_search_ids_accepts_a_path_relative_to_data_root(
+    search_client: TestClient,
+) -> None:
+    response = search_client.get("/search/ids", params={"image_uri": "queries/test.jpg"})
+
+    assert response.status_code == 200
+    assert len(response.json()) == 20
+
+
+def test_search_ids_without_indexed_photos_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATA_ROOT", str(tmp_path))
+    Image.new("RGB", (32, 16)).save(tmp_path / "bottle.jpg")
+    client = TestClient(
+        create_app(embedder=FakeEmbedder(), repository_factory=lambda: FakeRepository([]))
+    )
+
+    response = client.get("/search/ids", params={"image_uri": "bottle.jpg"})
+
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+@pytest.mark.parametrize(
+    ("params", "status_code"),
+    [
+        ({"image_uri": "queries/missing.jpg"}, 404),
+        ({"image_uri": "/etc/passwd"}, 400),
+        ({"image_uri": ""}, 422),
+        ({}, 422),
+    ],
+)
+def test_search_ids_errors(
+    search_client: TestClient,
+    repository: FakeRepository,
+    params: dict[str, str],
+    status_code: int,
+) -> None:
+    response = search_client.get("/search/ids", params=params)
+
+    assert response.status_code == status_code
+    assert repository.limits == []
+
+
 def test_model_is_loaded_once_at_startup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repository: FakeRepository
 ) -> None:
@@ -438,6 +501,7 @@ def test_swagger_is_grouped_and_ready_to_try(app_client: TestClient) -> None:
     assert tags == {
         "/search": "Поиск",
         "/search/uri": "Поиск",
+        "/search/ids": "Поиск",
         "/index": "Эталоны",
         "/references": "Эталоны",
         "/images": "Эталоны",
@@ -572,7 +636,7 @@ def healthy_database(settings):
         server_version="16",
         pgvector_version="0.8.0",
         table_exists=True,
-        embedding_dimension=384,
+        embedding_dimension=1536,
         reference_count=1,
         model_reference_count=1,
     )
@@ -580,7 +644,7 @@ def healthy_database(settings):
 
 class DimensionEmbedder(FakeEmbedder):
     def embed(self, image: Image.Image) -> list[float]:
-        return [0.0] * 384
+        return [0.0] * 1536
 
 
 @pytest.mark.parametrize(("database_ok", "status_code"), [(True, 200), (False, 503)])

@@ -17,10 +17,11 @@ from .base import EmbeddingError
 
 
 class DinoV2Embedder:
-    """Create normalized 384-dimensional embeddings with DINOv2-small.
+    """Create normalized embeddings with a DINOv2 model.
 
-    The model name and the expected dimension default to ``DINO_MODEL_NAME``
-    and ``DINO_EMBEDDING_DIMENSION``.
+    The default is DINOv2-giant with registers (1536 values). The model name
+    and the expected dimension default to ``DINO_MODEL_NAME`` and
+    ``DINO_EMBEDDING_DIMENSION``.
     """
 
     MODEL_NAME = DEFAULT_DINO_MODEL_NAME
@@ -85,6 +86,7 @@ class DinoV2Embedder:
 
         with self._torch.inference_mode():
             outputs = self.model(**model_inputs)
+            # CLS token; with-registers models put their register tokens after it.
             embedding = outputs.last_hidden_state[:, 0]
             embedding = self._torch.nn.functional.normalize(
                 embedding,

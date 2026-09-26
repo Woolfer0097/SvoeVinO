@@ -238,4 +238,4 @@ def test_schema_files_are_identical_and_match_the_spec() -> None:
     assert (MODULE_ROOT / "database" / "init.sql").read_text(encoding="utf-8") == schema
     assert "CREATE EXTENSION IF NOT EXISTS vector;" in schema
     assert "image_uri TEXT NOT NULL UNIQUE" in schema
-    assert "embedding VECTOR(384) NOT NULL" in schema
+    assert "embedding VECTOR(1536) NOT NULL" in schema

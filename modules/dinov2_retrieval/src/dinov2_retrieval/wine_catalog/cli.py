@@ -12,7 +12,7 @@ from ..config import get_database_url
 from .importer import import_csv
 from .migrations import apply_migrations
 from .scraper import scrape_wines
-from .embeddings import KINDS, generate_embeddings
+from .embeddings import DEFAULT_IMAGE_MODEL, DEFAULT_TEXT_MODEL, KINDS, generate_embeddings
 from .photo_manifest import build_photo_manifest, stage_manifest_photos, write_photo_manifest
 
 
@@ -57,8 +57,8 @@ def build_parser() -> argparse.ArgumentParser:
     embedder.add_argument("--uploads-root", type=Path)
     embedder.add_argument("--photo-manifest", type=Path)
     embedder.add_argument("--web-photos-root", type=Path, default=Path(os.getenv("WINE_PHOTOS_DIR", "data/web_photos")))
-    embedder.add_argument("--image-model", default="facebook/dinov2-small")
-    embedder.add_argument("--text-model", default="intfloat/multilingual-e5-base")
+    embedder.add_argument("--image-model", default=DEFAULT_IMAGE_MODEL)
+    embedder.add_argument("--text-model", default=DEFAULT_TEXT_MODEL)
     embedder.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
     embedder.add_argument("--text-batch-size", type=_positive_int, default=16)
     embedder.add_argument("--limit", type=_positive_int)

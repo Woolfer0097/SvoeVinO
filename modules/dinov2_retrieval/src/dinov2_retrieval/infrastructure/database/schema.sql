@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS reference_images (
     slug TEXT NOT NULL,
     image_uri TEXT NOT NULL UNIQUE,
     model_name TEXT NOT NULL,
-    embedding VECTOR(384) NOT NULL,
+    embedding VECTOR(1536) NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );

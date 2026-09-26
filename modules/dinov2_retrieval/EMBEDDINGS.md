@@ -78,7 +78,8 @@ export DATABASE_URL='postgresql://dinov2:dinov2@localhost:5433/wine_embeddings'
   --photo-manifest "$WINE_BUNDLE_DIR/dataset_photo_manifest.csv"
 ```
 
-Изображения кодирует существующая `facebook/dinov2-small` (384 значения).
+Изображения кодирует та же модель, что и поиск, — `facebook/dinov2-with-registers-giant`
+(1536 значений, ~4,5 ГБ весов).
 Текст из названия, категории, цвета, региона, сорта, описания и винодельни
 кодирует `intfloat/multilingual-e5-base` (768 значений); используется префикс
 `passage: `, усреднение токенов и L2-нормализация. Это разные пространства
