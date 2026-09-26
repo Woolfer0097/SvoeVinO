@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
 import math
 from types import SimpleNamespace
 
 import pytest
 from PIL import Image
 
-from dinov2_retrieval.contracts import EmbeddingResult
+from dinov2_retrieval.embedding.base import EmbeddingError
 from dinov2_retrieval.embedding.dinov2_embedder import DinoV2Embedder
 
 
@@ -195,23 +194,63 @@ def test_dinov2_model_and_processor_load_once(monkeypatch) -> None:
     assert model.calls == 2
 
 
-def test_cli_embed_prints_only_preview(monkeypatch, capsys) -> None:
-    from dinov2_retrieval.entrypoints import cli
+def fake_transformers(processor, model, loaded_names: list[str]):
+    class AutoImageProcessor:
+        @classmethod
+        def from_pretrained(cls, model_name):
+            loaded_names.append(model_name)
+            return processor
 
-    expected = EmbeddingResult(
-        path="/data/queries/test.jpeg",
-        model="facebook/dinov2-small",
-        dimension=384,
-        device="cpu",
-        embedding=[float(index) for index in range(384)],
+    class AutoModel:
+        @classmethod
+        def from_pretrained(cls, model_name):
+            loaded_names.append(model_name)
+            return model
+
+    return SimpleNamespace(AutoImageProcessor=AutoImageProcessor, AutoModel=AutoModel)
+
+
+def test_model_name_and_dimension_come_from_config(monkeypatch) -> None:
+    from dinov2_retrieval.embedding import dinov2_embedder as module
+
+    monkeypatch.setenv("DINO_MODEL_NAME", "local/dinov2-custom")
+    monkeypatch.setenv("DINO_EMBEDDING_DIMENSION", "384")
+    loaded_names: list[str] = []
+    transformers = fake_transformers(FakeProcessor(), FakeModel(), loaded_names)
+    monkeypatch.setattr(module, "import_module", lambda name: transformers)
+
+    embedder = DinoV2Embedder(torch_module=FakeTorch(cuda_available=False))
+
+    assert loaded_names == ["local/dinov2-custom", "local/dinov2-custom"]
+    assert embedder.model_name == "local/dinov2-custom"
+    assert embedder.embedding_dimension == 384
+
+
+def test_unexpected_dimension_raises_embedding_error(monkeypatch) -> None:
+    monkeypatch.setenv("DINO_EMBEDDING_DIMENSION", "768")
+    embedder = DinoV2Embedder(
+        torch_module=FakeTorch(cuda_available=False),
+        processor=FakeProcessor(),
+        model=FakeModel(),
     )
-    monkeypatch.setattr(cli, "create_embedding", lambda image_uri: expected)
 
-    assert cli.main(["embed", "--image-uri", "/data/queries/test.jpeg"]) == 0
+    with pytest.raises(EmbeddingError, match="unexpected dimension: 384; expected 768"):
+        embedder.embed(Image.new("RGB", (8, 4)))
 
-    output = json.loads(capsys.readouterr().out)
-    assert output["path"] == expected.path
-    assert output["dimension"] == 384
-    assert output["device"] == "cpu"
-    assert output["embedding_preview"] == [0.0, 1.0, 2.0, 3.0, 4.0]
-    assert "embedding" not in output
+
+def test_model_load_failure_raises_embedding_error(monkeypatch) -> None:
+    from dinov2_retrieval.embedding import dinov2_embedder as module
+
+    class AutoImageProcessor:
+        @classmethod
+        def from_pretrained(cls, model_name):
+            raise OSError("not in the cache and no internet connection")
+
+    monkeypatch.setattr(
+        module,
+        "import_module",
+        lambda name: SimpleNamespace(AutoImageProcessor=AutoImageProcessor),
+    )
+
+    with pytest.raises(EmbeddingError, match="Cannot load model facebook/dinov2-small"):
+        DinoV2Embedder(torch_module=FakeTorch(cuda_available=False))

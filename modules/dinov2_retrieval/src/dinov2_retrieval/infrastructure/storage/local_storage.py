@@ -57,13 +57,23 @@ class LocalImageStorage:
             preprocessor if preprocessor is not None else ImagePreprocessor()
         )
 
-    def validate(self, image_uri: str) -> ValidatedImage:
-        """Validate ``image_uri`` and return its dimensions and MIME type."""
+    def locate(self, image_uri: str) -> tuple[Path, str]:
+        """Return the path and MIME type of an existing, supported image file.
+
+        Only the path, existence and extension are checked; the file is not
+        decoded, so this is cheap enough for serving images.
+        """
 
         image_path = self._resolve_inside_data_root(image_uri)
 
         if not image_path.exists() or not image_path.is_file():
-            raise ImageNotFoundError(f"Image file does not exist: {image_uri}")
+            hint = (
+                ""
+                if Path(image_uri).is_absolute()
+                else f" (relative paths are taken from DATA_ROOT {self.data_root}, "
+                f"so this is {image_path})"
+            )
+            raise ImageNotFoundError(f"Image file does not exist: {image_uri}{hint}")
 
         extension = image_path.suffix.lower()
         if extension not in self.supported_extensions:
@@ -71,7 +81,12 @@ class LocalImageStorage:
                 "Unsupported image extension. Supported extensions: "
                 + ", ".join(self.supported_extensions)
             )
-        mime_type = SUPPORTED_IMAGE_MIME_TYPES[extension]
+        return image_path, SUPPORTED_IMAGE_MIME_TYPES[extension]
+
+    def validate(self, image_uri: str) -> ValidatedImage:
+        """Validate ``image_uri`` and return its dimensions and MIME type."""
+
+        image_path, mime_type = self.locate(image_uri)
 
         file_size = image_path.stat().st_size
         if file_size > self.max_file_size_bytes:

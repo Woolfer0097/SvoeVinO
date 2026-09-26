@@ -1,4 +1,25 @@
 services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: dinov2
+      POSTGRES_USER: dinov2
+      POSTGRES_PASSWORD: dinov2
+    ports:
+      # Only this machine: the password is a well-known development default.
+      - "127.0.0.1:${POSTGRES_PORT:-5433}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - type: bind
+        source: ./database/init.sql
+        target: /docker-entrypoint-initdb.d/init.sql
+        read_only: true
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dinov2 -d dinov2"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   dinov2-retrieval:
     build:
       context: .
@@ -12,7 +33,11 @@ services:
     environment:
       DATA_ROOT: /data
       MAX_IMAGE_SIZE_BYTES: ${MAX_IMAGE_SIZE_BYTES:-10485760}
-      HF_HOME: /root/.cache/huggingface
+      HF_HOME: /home/app/.cache/huggingface
+      DATABASE_URL: ${DATABASE_URL:-postgresql://dinov2:dinov2@postgres:5432/dinov2}
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - type: bind
         source: ./data
@@ -20,18 +45,50 @@ services:
         read_only: true
       - type: bind
         source: ./model-cache
-        target: /root/.cache/huggingface
-    command: ["--help"]
+        target: /home/app/.cache/huggingface
+    command: ["serve"]
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     healthcheck:
       test:
         [
           "CMD",
           "python",
           "-c",
-          "import dinov2_retrieval; from dinov2_retrieval.config import get_data_root; get_data_root()",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)",
         ]
       interval: 30s
       timeout: 5s
-      start_period: 5s
+      # The model is loaded (and on the first start downloaded) before serving.
+      start_period: 120s
       retries: 3
-    restart: "no"
+    # Long-running search service; `docker compose run` ignores this policy.
+    restart: unless-stopped
+
+  wine-pipeline:
+    profiles: ["pipeline"]
+    build:
+      context: .
+      dockerfile: Dockerfile.wine-pipeline
+      args:
+        APP_UID: ${APP_UID:-1000}
+        APP_GID: ${APP_GID:-1000}
+    working_dir: /app
+    env_file:
+      - .env
+    environment:
+      WINE_PHOTOS_DIR: /data/web_photos
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - type: bind
+        source: ../../Датасет
+        target: /input
+        read_only: true
+      - type: bind
+        source: ./data
+        target: /data
+
+volumes:
+  postgres_data:

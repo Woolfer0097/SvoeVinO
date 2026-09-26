@@ -12,7 +12,6 @@ from dinov2_retrieval.infrastructure.storage.local_storage import (
     ImageNotFoundError,
     ImageOutsideDataRootError,
     ImageTooLargeError,
-    LocalImageStorage,
     UnsupportedImageFormatError,
 )
 

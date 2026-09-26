@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "wine-label-preprocessing"
+version = "0.1.0"
+description = "CPU-first preprocessing and cylindrical unwrapping for wine labels"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "numpy>=1.26,<3.0",
+    "opencv-python-headless>=4.8,<5.0",
+    "Pillow>=10.0,<13.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.0,<2.0",
+    "pytest>=8.0,<10.0",
+]
+dewarpnet = [
+    "torch>=2.4,<3.0",
+    "torchvision>=0.19,<1.0",
+]
+
+[project.scripts]
+wine-label-preprocess = "wine_label_preprocessing.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

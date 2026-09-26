@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "dinov2-retrieval"
 version = "0.1.0"
-description = "Isolated image validation scaffold for the DINOv2 retrieval module"
+description = "Visual wine search by photo: DINOv2 embeddings stored in PostgreSQL/pgvector"
 requires-python = ">=3.11"
 dependencies = [
     "Pillow>=10.0,<13.0",
@@ -15,18 +15,48 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0,<10.0",
+    "httpx>=0.27,<1.0",
+]
+api = [
+    "fastapi>=0.110,<1.0",
+    "uvicorn>=0.29,<1.0",
+    "python-multipart>=0.0.9,<1.0",
 ]
 ml = [
-    "torch>=2.4,<3.0",
-    "torchvision>=0.19,<1.0",
+    "torch>=2.7,<3.0",
+    "torchvision>=0.22,<1.0",
     "transformers>=4.45,<5.0",
     "numpy>=1.26,<3.0",
     "accelerate>=0.34,<2.0",
 ]
+db = [
+    "psycopg[binary]>=3.1,<4.0",
+    "pgvector>=0.2.5,<1.0",
+    "numpy>=1.26,<3.0",
+]
+catalog = [
+    "httpx>=0.27,<1.0",
+]
+catalog-browser = [
+    "playwright>=1.49,<2.0",
+]
+
+[project.scripts]
+wine-pipeline = "dinov2_retrieval.wine_catalog.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
 
+[tool.setuptools.package-data]
+dinov2_retrieval = [
+    "infrastructure/database/schema.sql",
+    "wine_catalog/migrations/*.sql",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-m 'not integration'"
+markers = [
+    "integration: needs running PostgreSQL and DINOv2 weights; run manually with -m integration",
+]
