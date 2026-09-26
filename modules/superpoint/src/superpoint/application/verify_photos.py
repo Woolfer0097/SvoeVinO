@@ -37,14 +37,22 @@ def verify_photos(
     request: VerificationRequest,
     *,
     storage: ImageStorage | None = None,
+    reference_storage: ImageStorage | None = None,
     preprocessor: ImagePreprocessor | None = None,
     matcher: PhotoMatcher | None = None,
     geometry: GeometryVerifier | None = None,
     thresholds: VerificationThresholds | None = None,
 ) -> VerificationResult:
-    """Validate both photos, match them and decide whether they show the same object."""
+    """Validate both photos, match them and decide whether they show the same object.
+
+    ``reference_storage`` is the catalog root when the query lives in a
+    temporary upload directory and the reference path comes from the database.
+    """
 
     image_storage = storage if storage is not None else LocalImageStorage()
+    catalog_storage = (
+        reference_storage if reference_storage is not None else image_storage
+    )
     image_preprocessor = (
         preprocessor if preprocessor is not None else ImagePreprocessor()
     )
@@ -52,7 +60,7 @@ def verify_photos(
         thresholds if thresholds is not None else get_verification_thresholds()
     )
     query_image = image_storage.validate(request.query_uri)
-    reference_image = image_storage.validate(request.reference_uri)
+    reference_image = catalog_storage.validate(request.reference_uri)
     photo_matcher = matcher if matcher is not None else _default_matcher()
     geometry_verifier = geometry if geometry is not None else _default_geometry()
 

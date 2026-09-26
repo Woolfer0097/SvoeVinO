@@ -46,6 +46,23 @@ def _read_limited(source: BinaryIO) -> bytes:
 
 
 @contextmanager
+def temporary_image(
+    source: BinaryIO,
+    *,
+    filename: str | None = None,
+    content_type: str | None = None,
+) -> Iterator[tuple[LocalImageStorage, str]]:
+    """Yield a storage and URI for one uploaded photo, then delete it."""
+
+    suffix = upload_suffix(filename, content_type)
+    payload = _read_limited(source)
+    with TemporaryDirectory(prefix="superpoint-upload-") as directory:
+        image_path = Path(directory) / f"query{suffix}"
+        image_path.write_bytes(payload)
+        yield LocalImageStorage(data_root=directory), str(image_path)
+
+
+@contextmanager
 def temporary_pair(
     query: BinaryIO,
     reference: BinaryIO,

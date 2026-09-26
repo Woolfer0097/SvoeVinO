@@ -1,25 +1,34 @@
 """Long-running HTTP service with Swagger UI: the matcher is loaded once at start.
 
-Pair verification can be run from Swagger (http://localhost:8001/docs) by
-uploading two photos. Uploads are not kept.
+Candidate ranking can be run from Swagger (http://localhost:8001/docs) by
+uploading a query photo and a JSON list of catalog ids. The upload is not kept.
+Reference photos are read from the DINOv2 PostgreSQL catalog.
 """
 
 from __future__ import annotations
 
+import json
 import logging
-from collections.abc import AsyncIterator
+import re
+from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from pathlib import Path
 from threading import Lock
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, RedirectResponse
 from PIL import Image
 from pydantic import BaseModel
 
-from ..application.verify_photos import GeometryVerifier, verify_photos
+from ..application.rank_candidates import rank_candidates
+from ..application.verify_photos import GeometryVerifier
 from ..config import ConfigurationError, get_max_image_size_bytes
-from ..contracts import VerificationRequest, VerificationResult
+from ..contracts import CandidateScore
+from ..infrastructure.database.reference_catalog import (
+    CandidatesNotFoundError,
+    CatalogError,
+    PostgresReferenceCatalog,
+    ReferenceCatalog,
+)
 from ..infrastructure.storage.local_storage import (
     CorruptedImageError,
     ImageNotFoundError,
@@ -29,7 +38,7 @@ from ..infrastructure.storage.local_storage import (
     LocalImageStorage,
     UnsupportedImageFormatError,
 )
-from ..infrastructure.storage.upload_storage import temporary_pair
+from ..infrastructure.storage.upload_storage import temporary_image
 from ..matching.base import PhotoMatcher
 from ..preprocessing.image_preprocessor import ImagePreprocessingError
 
@@ -45,7 +54,8 @@ ERROR_STATUS_CODES: dict[type[Exception], int] = {
 }
 
 WARMUP_IMAGE_SIZE = (64, 64)
-# Two max-sized photos plus multipart boundaries and part headers.
+MAX_CANDIDATES = 20
+# One max-sized photo, a short JSON id list, and multipart framing.
 _UPLOAD_OVERHEAD_BYTES = 64 * 1024
 
 TAG_VERIFY = "Проверка"
@@ -54,9 +64,9 @@ TAG_SERVICE = "Служебное"
 OPENAPI_TAGS = [
     {
         "name": TAG_VERIFY,
-        "description": "Сравнить фото запроса с эталоном. Совпадение принимается "
-        "только если достаточно соответствий SuperPoint+LightGlue лежат на одной "
-        "гомографии.",
+        "description": "Сравнить фото запроса с эталонами из каталога DINOv2. "
+        "Оценка — доля inlier после RANSAC, но только если пара прошла пороги; "
+        "иначе 0. У вина с несколькими фото берётся лучшая.",
     },
     {
         "name": TAG_SERVICE,
@@ -72,16 +82,21 @@ SWAGGER_UI_PARAMETERS = {
 }
 
 DESCRIPTION = """
-Проверка пары фотографий: SuperPoint извлекает точки, LightGlue строит
-соответствия, OpenCV RANSAC принимает пару только если они согласованы одной
-гомографией. Модель загружается один раз при старте сервиса.
+Проверка фото запроса против списка кандидатов из каталога DINOv2.
+SuperPoint извлекает точки, LightGlue строит соответствия, OpenCV RANSAC
+считает, какая доля соответствий лежит на одной гомографии. Модель
+загружается один раз при старте сервиса.
 
-`verified: false` — это обычный ответ **200**, а не ошибка: проверка дошла до
-вердикта, и пара не совпала.
+Эталонные фото сервис читает из PostgreSQL (`reference_images`) по `wine_id`
+и открывает `image_uri` внутри `DATA_ROOT`. Загруженное фото не сохраняется.
 
-**Быстрая проверка:** **Проверка → `POST /verify`** — выберите два файла и
-нажмите `Execute`. В ответе `query_path` и `reference_path` — имена
-загруженных файлов, а не пути на диске: фото не сохраняются.
+`score` — доля inlier (от 0 до 1) у лучшего эталонного фото этого id, если
+пара прошла пороги `MIN_MATCHES`, `MIN_INLIERS` и `MIN_INLIER_RATIO`. Иначе
+0: две точки из двух не становятся единицей. Список отсортирован по `score`
+по убыванию. Низкий score — обычный ответ **200**, а не ошибка.
+
+**Быстрая проверка:** **Проверка → `POST /verify`** — файл `query` и поле
+`candidates` с JSON-массивом id (не больше 20), затем `Execute`.
 """
 
 
@@ -93,17 +108,75 @@ class HealthStatus(BaseModel):
     device: str
 
 
-def upload_label(filename: str | None, fallback: str) -> str:
-    """Return the uploaded file name, never a directory path."""
-
-    name = Path(filename or "").name
-    return name or fallback
-
-
 def max_upload_body_bytes() -> int:
-    """Upper bound for one pair request, including multipart framing."""
+    """Upper bound for one query photo plus the candidate list."""
 
-    return 2 * get_max_image_size_bytes() + _UPLOAD_OVERHEAD_BYTES
+    return get_max_image_size_bytes() + _UPLOAD_OVERHEAD_BYTES
+
+
+def parse_candidate_ids(raw: str) -> list[str]:
+    """Parse wine ids from a JSON array or a comma-separated list.
+
+    Swagger sends a text field. A pasted array is often wrapped in extra
+    quotes, so the raw value is not valid JSON until that layer is removed.
+    """
+
+    parsed = _decode_candidate_list(raw.strip().lstrip("\ufeff"))
+    if not parsed:
+        raise ValueError(
+            "candidates must be a JSON array of wine ids or a comma-separated list"
+        )
+    if len(parsed) > MAX_CANDIDATES:
+        raise ValueError(
+            f"candidates must contain at most {MAX_CANDIDATES} ids"
+        )
+    if any(not item.strip() for item in parsed):
+        raise ValueError("candidates must not contain empty ids")
+    ids = [item.strip() for item in parsed]
+    if len(set(ids)) != len(ids):
+        raise ValueError("candidates must not contain duplicate ids")
+    return ids
+
+
+def _decode_candidate_list(text: str) -> list[str] | None:
+    parsed = _loads_id_list(text)
+    if parsed is not _INVALID_JSON:
+        return parsed
+    if len(text) >= 2 and text[0] == text[-1] and text[0] in {'"', "'"}:
+        parsed = _loads_id_list(text[1:-1].strip())
+        if parsed is not _INVALID_JSON:
+            return parsed
+    quoted = re.findall(r'"([^"\\]+)"', text)
+    if quoted and "[" in text:
+        return quoted
+    if "[" in text or "{" in text:
+        return None
+    pieces = [piece.strip().strip("'\"") for piece in re.split(r"[,\n]", text)]
+    pieces = [piece for piece in pieces if piece]
+    return pieces or None
+
+
+_INVALID_JSON = object()
+
+
+def _loads_id_list(text: str) -> list[str] | None | object:
+    """Return ids, None for JSON that is not a string list, or a sentinel."""
+
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        unescaped = text.replace('\\"', '"')
+        if unescaped == text:
+            return _INVALID_JSON
+        try:
+            parsed = json.loads(unescaped)
+        except json.JSONDecodeError:
+            return _INVALID_JSON
+    if isinstance(parsed, str):
+        return _loads_id_list(parsed.strip())
+    if isinstance(parsed, list) and all(isinstance(item, str) for item in parsed):
+        return parsed
+    return None
 
 
 class MatcherProvider:
@@ -218,16 +291,25 @@ async def _send_json(send, status_code: int, detail: str) -> None:
 def create_app(
     matcher: PhotoMatcher | None = None,
     geometry: GeometryVerifier | None = None,
+    catalog: ReferenceCatalog | None = None,
+    reference_storage: LocalImageStorage | None = None,
 ) -> FastAPI:
     """Build the API; collaborators are injectable for tests.
 
     The matcher is loaded when the service starts, so the first request is as
     fast as the others and a missing model fails the start, not a user request.
+    The catalog is opened per request, so a down database does not block health.
     """
 
     matcher_provider = MatcherProvider(matcher)
     geometry_box: list[GeometryVerifier | None] = [geometry]
+    reference_catalog = catalog if catalog is not None else PostgresReferenceCatalog()
     inference_lock = Lock()
+
+    def catalog_storage() -> LocalImageStorage:
+        if reference_storage is not None:
+            return reference_storage
+        return LocalImageStorage()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -244,7 +326,7 @@ def create_app(
         yield
 
     app = FastAPI(
-        title="SuperPoint — проверка пары фото",
+        title="SuperPoint — проверка кандидатов",
         description=DESCRIPTION,
         version="0.1.0",
         lifespan=lifespan,
@@ -264,6 +346,18 @@ def create_app(
     ) -> JSONResponse:
         return JSONResponse(status_code=500, content={"detail": str(exc)})
 
+    @app.exception_handler(CandidatesNotFoundError)
+    async def missing_candidates_handler(
+        request: Request, exc: CandidatesNotFoundError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=404, content={"detail": str(exc)})
+
+    @app.exception_handler(CatalogError)
+    async def catalog_error_handler(
+        request: Request, exc: CatalogError
+    ) -> JSONResponse:
+        return JSONResponse(status_code=503, content={"detail": str(exc)})
+
     app.add_middleware(LimitUploadSize)
 
     @app.get("/", include_in_schema=False)
@@ -273,39 +367,36 @@ def create_app(
     @app.post(
         "/verify",
         tags=[TAG_VERIFY],
-        response_model=VerificationResult,
-        summary="Проверить загруженную пару фото",
+        response_model=list[CandidateScore],
+        summary="Сравнить фото запроса со списком кандидатов",
     )
     def verify(
         query: UploadFile = File(
             description="фото запроса: jpg, jpeg, png или webp"
         ),
-        reference: UploadFile = File(
-            description="эталон: jpg, jpeg, png или webp"
+        candidates: str = Form(
+            description="JSON-массив wine_id или список через запятую, не больше 20. "
+            "В Swagger массив можно вставить как есть, с переносами строк.",
+            examples=[
+                "shepot, agrolayn_mountain_eagle_cabernet_sauvignon_kaberne_sovinon_krasnoe_suhoe_135_c2ea2996ff"
+            ],
         ),
-    ) -> VerificationResult:
-        """Оба файла проходят те же проверки, что фото в `DATA_ROOT`, и **не
-        сохраняются**: они лежат во временной папке только на время запроса.
-
-        `query_path` и `reference_path` в ответе — имена загруженных файлов,
-        не пути на диске. `verified: false` тоже возвращается с кодом 200.
+    ) -> list[CandidateScore]:
+        """Фото запроса не сохраняется. Эталоны читаются из PostgreSQL по id
+        и сравниваются по очереди. Ответ — `id` и `score`, по убыванию score.
         """
 
-        with temporary_pair(
+        try:
+            candidate_ids = parse_candidate_ids(candidates)
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        with temporary_image(
             query.file,
-            reference.file,
-            query_filename=query.filename,
-            query_content_type=query.content_type,
-            reference_filename=reference.filename,
-            reference_content_type=reference.content_type,
-        ) as (upload_storage, query_uri, reference_uri):
-            result = _verify(query_uri, reference_uri, upload_storage)
-        return result.model_copy(
-            update={
-                "query_path": upload_label(query.filename, "query"),
-                "reference_path": upload_label(reference.filename, "reference"),
-            }
-        )
+            filename=query.filename,
+            content_type=query.content_type,
+        ) as (upload_storage, query_uri):
+            upload_storage.validate(query_uri)
+            return _rank(query_uri, candidate_ids, upload_storage)
 
     @app.get(
         "/health",
@@ -326,22 +417,26 @@ def create_app(
             device=loaded.device,
         )
 
-    def _verify(
+    def _rank(
         query_uri: str,
-        reference_uri: str,
-        search_storage: LocalImageStorage,
-    ) -> VerificationResult:
+        candidate_ids: Sequence[str],
+        query_storage: LocalImageStorage,
+    ) -> list[CandidateScore]:
         if geometry_box[0] is None:
             raise HTTPException(status_code=503, detail="Matcher is not loaded")
+        # Resolve files before the matcher lock so a slow database does not
+        # block other comparisons.
+        photos = reference_catalog.image_uris(candidate_ids)
         with inference_lock:
-            return verify_photos(
-                VerificationRequest(
-                    query_uri=query_uri,
-                    reference_uri=reference_uri,
-                ),
-                storage=search_storage,
+            return rank_candidates(
+                query_uri,
+                candidate_ids,
+                query_storage=query_storage,
+                reference_storage=catalog_storage(),
+                catalog=reference_catalog,
                 matcher=matcher_provider.get(),
                 geometry=geometry_box[0],
+                photos=photos,
             )
 
     return app

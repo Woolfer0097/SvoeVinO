@@ -24,11 +24,19 @@ services:
       RANSAC_CONFIDENCE: ${RANSAC_CONFIDENCE:-0.999}
       TORCH_HOME: /home/app/.cache/torch
       PORT: "8000"
+      # Host Postgres is 127.0.0.1:5433. Inside this container that address is
+      # the container itself, so the default reaches the host port instead.
+      DATABASE_URL: ${DATABASE_URL:-postgresql://dinov2:dinov2@host.docker.internal:5433/dinov2}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "127.0.0.1:${API_PORT:-8001}:8000"
     volumes:
+      # image_uri in reference_images is /data/reference/<file> inside the
+      # DINOv2 data root. Mount that root directly: a nested mount onto a
+      # read-only /data fails unless the mountpoint already exists.
       - type: bind
-        source: ./data
+        source: ../dinov2_retrieval/data
         target: /data
         read_only: true
       - type: bind

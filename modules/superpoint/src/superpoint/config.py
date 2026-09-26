@@ -226,6 +226,19 @@ def get_ransac_confidence(value: float | None = None) -> float:
     return parsed
 
 
+def get_database_url(value: str | None = None) -> str:
+    """Return the PostgreSQL URL of the DINOv2 reference catalog.
+
+    On the host that database is ``127.0.0.1:5433``. A container cannot use
+    that address for the host, so Compose points it at ``host.docker.internal``.
+    """
+
+    raw_value = value if value is not None else os.getenv("DATABASE_URL")
+    if raw_value is None or not raw_value.strip():
+        raise ConfigurationError("DATABASE_URL must be set")
+    return raw_value.strip()
+
+
 def get_requested_device(value: str | None = None) -> str:
     """Return the requested runtime device: auto, cpu or cuda."""
 

@@ -115,23 +115,37 @@ docker compose ps    # дождаться healthy; первый старт ка�
 ```
 
 Откройте <http://localhost:8001> — редирект на Swagger UI. «Try it out» уже
-включён. `verified: false` приходит с кодом 200: это вердикт, а не ошибка.
+включён. Низкий `score` приходит с кодом 200: сравнение дошло до конца.
+
+`POST /verify` принимает фото запроса и JSON-массив `wine_id` (не больше 20).
+Эталоны читаются из PostgreSQL `dinov2` (`127.0.0.1:5433` на хосте,
+логин/пароль/база `dinov2`): таблица `reference_images`, колонки `wine_id` и
+`image_uri`. Из контейнера этот порт доступен как `host.docker.internal:5433`,
+потому что `127.0.0.1` внутри контейнера — сам контейнер. Файлы по
+`image_uri` (`/data/reference/...`) берутся из каталога DINOv2: compose
+монтирует `modules/dinov2_retrieval/data` целиком в `/data`.
+
+`score` — доля inlier после RANSAC, от 0 до 1, но только если пара прошла
+пороги. Иначе 0. Если у id несколько фото, берётся лучшая доля. Ответ
+отсортирован по score по убыванию.
 
 | Раздел | Метод и путь | Что делает |
 | --- | --- | --- |
-| Проверка | `POST /verify` | два файла, `query` и `reference`; не сохраняются. В ответе `query_path` и `reference_path` — имена файлов, не пути на диске |
+| Проверка | `POST /verify` | файл `query` и поле `candidates` (JSON-массив id). Фото не сохраняется. Ответ: `id`, `score` |
 | Служебное | `GET /health` | модель загружена: `model` и `device` (Docker healthcheck) |
 
 ```bash
 curl -s -X POST http://localhost:8001/verify \
-  -F query=@data/queries/photo.jpg \
-  -F reference=@data/references/label.jpg
+  -F query=@photo.jpg \
+  -F 'candidates=["shepot","agrolayn_mountain_eagle_cabernet_sauvignon_kaberne_sovinon_krasnoe_suhoe_135_c2ea2996ff"]'
 ```
 
 Локально без Docker, после `pip install -e '.[api,ml]'`:
 
 ```bash
-DATA_ROOT=/data .venv/bin/uvicorn --factory superpoint.entrypoints.api:create_app \
+DATA_ROOT=/path/to/dinov2_retrieval/data \
+DATABASE_URL=postgresql://dinov2:dinov2@127.0.0.1:5433/dinov2 \
+  .venv/bin/uvicorn --factory superpoint.entrypoints.api:create_app \
   --host 127.0.0.1 --port 8001
 ```
 
@@ -148,7 +162,8 @@ mkdir -p data/queries data/references model-cache
 docker compose build
 ```
 
-`./data` монтируется только для чтения в `/data`. `./model-cache` монтируется
+В `/data` монтируется только для чтения `modules/dinov2_retrieval/data`,
+чтобы пути из базы открывались как есть. `./model-cache` монтируется
 в `/home/app/.cache/torch` (`TORCH_HOME`), поэтому веса не скачиваются заново.
 На Linux каталог кэша должен быть доступен на запись `APP_UID` (по умолчанию 1000).
 

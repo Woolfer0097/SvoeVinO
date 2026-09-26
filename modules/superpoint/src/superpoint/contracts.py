@@ -14,6 +14,18 @@ class VerificationRequest(BaseModel):
     reference_uri: str
 
 
+class CandidateScore(BaseModel):
+    """One catalog id scored against the query photo."""
+
+    id: str
+    score: float = Field(
+        ge=0.0,
+        le=1.0,
+        description="Доля inlier после RANSAC у лучшего эталонного фото, если пара "
+        "прошла пороги. Иначе 0, даже если доля сама по себе высокая.",
+    )
+
+
 class ValidatedImage(BaseModel):
     """Information about an image that passed local validation."""
 
