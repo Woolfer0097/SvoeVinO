@@ -36,6 +36,15 @@ def _as_optional_int(value: str | int | None) -> int | None:
     return None if value is None or value == "" else _as_int(value, default=1)
 
 
+def _as_optional_probability(value: str | float | None) -> float | None:
+    if value is None or value == "":
+        return None
+    parsed = float(value)
+    if not 0 < parsed < 1:
+        raise ValueError("Probability configuration values must be in (0, 1)")
+    return parsed
+
+
 def _as_float(value: str | float | None, *, default: float) -> float:
     if value is None:
         return default
@@ -64,6 +73,8 @@ class OCRConfig:
     use_doc_unwarping: bool = True
     use_textline_orientation: bool = True
     text_det_limit_side_len: int | None = None
+    text_det_thresh: float | None = None
+    text_det_box_thresh: float | None = None
     text_detection_model_name: str | None = None
     text_recognition_model_name: str | None = None
     expected_languages: tuple[str, ...] = ("ru", "en")
@@ -96,6 +107,12 @@ class OCRConfig:
                 ),
                 text_det_limit_side_len=_as_optional_int(
                     os.getenv("OCR_TEXT_DET_LIMIT_SIDE_LEN")
+                ),
+                text_det_thresh=_as_optional_probability(
+                    os.getenv("OCR_TEXT_DET_THRESH")
+                ),
+                text_det_box_thresh=_as_optional_probability(
+                    os.getenv("OCR_TEXT_DET_BOX_THRESH")
                 ),
                 text_detection_model_name=os.getenv("OCR_TEXT_DETECTION_MODEL_NAME") or None,
                 text_recognition_model_name=os.getenv("OCR_TEXT_RECOGNITION_MODEL_NAME") or None,

@@ -71,6 +71,10 @@ class PaddleOCREngine:
             kwargs["device"] = self.config.device
         if self.config.text_det_limit_side_len is not None:
             kwargs["text_det_limit_side_len"] = self.config.text_det_limit_side_len
+        if self.config.text_det_thresh is not None:
+            kwargs["text_det_thresh"] = self.config.text_det_thresh
+        if self.config.text_det_box_thresh is not None:
+            kwargs["text_det_box_thresh"] = self.config.text_det_box_thresh
         if self.config.text_detection_model_name is not None:
             kwargs["text_detection_model_name"] = self.config.text_detection_model_name
         if self.config.text_recognition_model_name is not None:

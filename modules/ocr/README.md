@@ -98,12 +98,19 @@ the OCR model and weights can still be changed in a later experiment.
 | `OCR_USE_DOC_UNWARPING` | Enable PaddleOCR document unwarping |
 | `OCR_USE_TEXTLINE_ORIENTATION` | Enable text-line orientation classifier |
 | `OCR_TEXT_DET_LIMIT_SIDE_LEN` | Optional positive detection-side limit |
+| `OCR_TEXT_DET_THRESH` | Optional pixel threshold for detecting weak text |
+| `OCR_TEXT_DET_BOX_THRESH` | Optional box confidence threshold for detecting weak text |
 | `OCR_TEXT_DETECTION_MODEL_NAME` | Optional PaddleOCR detection model name |
 | `OCR_TEXT_RECOGNITION_MODEL_NAME` | Optional PaddleOCR recognition model name |
 
 These are OCR pipeline settings, not image enhancement. Change one setting at a
 time and compare against the same labeled photos before adopting it as a
 default. A faster profile is not promoted if it loses important text.
+
+Docker Compose uses the official BOS model source for first-time model
+downloads (`PADDLE_PDX_MODEL_SOURCE=BOS`). Inference remains local. Model files
+are not persisted outside the container, so a newly created container may need
+to download them again.
 
 ## Manual review evaluation
 
@@ -127,6 +134,23 @@ and word boundaries. It deliberately does not correct Latin/Cyrillic lookalikes
 or approximate spellings, so its counts are strict regression indicators rather
 than a complete measure of OCR quality. Review the individual JSON/TXT outputs
 alongside the evaluation report before accepting a new profile.
+
+On the current 15 manually annotated photos, the quality experiments produced:
+
+| Run | Change from `test8` | Exact name candidate | Complete name in text | Expected years | `other` phrases |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `test8` | Current default | 7/15 | 6/15 | 7/8 | 16/32 |
+| `test9` | Cyrillic PP-OCRv5 recognizer | 4/15 | 6/15 | 8/8 | 17/32 |
+| `test10` | PP-OCRv6 medium detector | 1/15 | 3/15 | 8/8 | 11/32 |
+| `test11` | PP-OCRv5 box threshold 0.4 | 5/15 | 6/15 | 6/8 | 15/32 |
+
+These counts are strict matches against selected phrases, not CER or general
+accuracy estimates. The faster alternative recognizer and detector both lost
+previously correct names. The lower box threshold recovered `пет-нат` in the
+text of `image10`, but lost two correct name candidates and one expected year.
+The default profile therefore remains unchanged. A 0.5 threshold probe on four
+key photos also lost a correct name and failed to recover `пет-нат`, so it was
+not run on the complete set.
 
 ## Local Checks
 

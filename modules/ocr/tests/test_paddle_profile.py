@@ -22,6 +22,8 @@ class PaddleProfileTests(unittest.TestCase):
             use_doc_unwarping=False,
             use_textline_orientation=False,
             text_det_limit_side_len=960,
+            text_det_thresh=0.2,
+            text_det_box_thresh=0.4,
             text_detection_model_name="PP-OCRv5_mobile_det",
             text_recognition_model_name="eslav_PP-OCRv5_mobile_rec",
         )
@@ -40,6 +42,8 @@ class PaddleProfileTests(unittest.TestCase):
             use_doc_unwarping=False,
             use_textline_orientation=False,
             text_det_limit_side_len=960,
+            text_det_thresh=0.2,
+            text_det_box_thresh=0.4,
             text_detection_model_name="PP-OCRv5_mobile_det",
             text_recognition_model_name="eslav_PP-OCRv5_mobile_rec",
         )

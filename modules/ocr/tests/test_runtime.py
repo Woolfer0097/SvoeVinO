@@ -54,8 +54,8 @@ class CachedOCRRuntimeTests(unittest.TestCase):
             "wine_ocr.application.runtime.create_engine",
             side_effect=[FakeEngine(), FakeEngine()],
         ) as create_engine:
-            runtime.get_engine(OCRConfig(use_doc_unwarping=True))
-            runtime.get_engine(OCRConfig(use_doc_unwarping=False))
+            runtime.get_engine(OCRConfig(text_det_box_thresh=None))
+            runtime.get_engine(OCRConfig(text_det_box_thresh=0.4))
 
         self.assertEqual(create_engine.call_count, 2)
 

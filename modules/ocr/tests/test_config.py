@@ -25,6 +25,8 @@ class OCRConfigTests(unittest.TestCase):
                 "OCR_USE_DOC_UNWARPING": "false",
                 "OCR_USE_TEXTLINE_ORIENTATION": "true",
                 "OCR_TEXT_DET_LIMIT_SIDE_LEN": "960",
+                "OCR_TEXT_DET_THRESH": "0.2",
+                "OCR_TEXT_DET_BOX_THRESH": "0.4",
                 "OCR_TEXT_DETECTION_MODEL_NAME": "PP-OCRv5_mobile_det",
                 "OCR_TEXT_RECOGNITION_MODEL_NAME": "eslav_PP-OCRv5_mobile_rec",
                 "OCR_EXPECTED_LANGUAGES": "ru,en",
@@ -45,6 +47,8 @@ class OCRConfigTests(unittest.TestCase):
         self.assertFalse(config.use_doc_unwarping)
         self.assertTrue(config.use_textline_orientation)
         self.assertEqual(config.text_det_limit_side_len, 960)
+        self.assertEqual(config.text_det_thresh, 0.2)
+        self.assertEqual(config.text_det_box_thresh, 0.4)
         self.assertEqual(config.text_detection_model_name, "PP-OCRv5_mobile_det")
         self.assertEqual(
             config.text_recognition_model_name, "eslav_PP-OCRv5_mobile_rec"
@@ -78,6 +82,15 @@ class OCRConfigTests(unittest.TestCase):
         with patch.dict(
             os.environ,
             {"OCR_TEXT_DET_LIMIT_SIDE_LEN": "0"},
+            clear=True,
+        ):
+            with self.assertRaises(ConfigurationError):
+                OCRConfig.from_env()
+
+    def test_from_env_rejects_invalid_detection_threshold(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"OCR_TEXT_DET_BOX_THRESH": "1.5"},
             clear=True,
         ):
             with self.assertRaises(ConfigurationError):
