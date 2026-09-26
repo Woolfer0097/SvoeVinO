@@ -23,8 +23,8 @@ api = [
     "python-multipart>=0.0.9,<1.0",
 ]
 ml = [
-    "torch>=2.4,<3.0",
-    "torchvision>=0.19,<1.0",
+    "torch>=2.7,<3.0",
+    "torchvision>=0.22,<1.0",
     "transformers>=4.45,<5.0",
     "numpy>=1.26,<3.0",
     "accelerate>=0.34,<2.0",

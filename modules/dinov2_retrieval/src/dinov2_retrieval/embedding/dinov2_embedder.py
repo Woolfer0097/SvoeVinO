@@ -31,6 +31,7 @@ class DinoV2Embedder:
         model_name: str | None = None,
         *,
         embedding_dimension: int | None = None,
+        device: str | None = None,
         torch_module: Any | None = None,
         processor: Any | None = None,
         model: Any | None = None,
@@ -59,7 +60,7 @@ class DinoV2Embedder:
         self.processor = processor
         self.model = model
         self._device = self._torch.device(
-            "cuda" if self._torch.cuda.is_available() else "cpu"
+            device or ("cuda" if self._torch.cuda.is_available() else "cpu")
         )
         self.model.to(self._device)
         self.model.eval()

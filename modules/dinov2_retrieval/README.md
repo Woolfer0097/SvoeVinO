@@ -7,7 +7,8 @@
 PostgreSQL с расширением pgvector.
 
 Для импорта исходного CSV и загрузки эталонных фотографий с vino-svoe.ru
-см. [WINE_PIPELINE.md](WINE_PIPELINE.md).
+см. [WINE_PIPELINE.md](WINE_PIPELINE.md). Перенос дампа и расчёт векторов на
+другой GPU-машине описаны в [EMBEDDINGS.md](EMBEDDINGS.md).
 
 Сервис отвечает только за визуальный поиск. OCR, SuperPoint/LightGlue,
 frontend, рекомендации, дообучение DINOv2 и обработка текста — внешние

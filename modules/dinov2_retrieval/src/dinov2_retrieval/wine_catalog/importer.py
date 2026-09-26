@@ -44,12 +44,32 @@ ON CONFLICT (import_source, source_row_number) DO UPDATE SET
     slug = EXCLUDED.slug,
     dataset_photo = EXCLUDED.dataset_photo,
     source_data = EXCLUDED.source_data,
+    dataset_photo_embedding = CASE WHEN wines.dataset_photo IS DISTINCT FROM EXCLUDED.dataset_photo
+        THEN NULL ELSE wines.dataset_photo_embedding END,
+    dataset_photo_embedding_model = CASE WHEN wines.dataset_photo IS DISTINCT FROM EXCLUDED.dataset_photo
+        THEN NULL ELSE wines.dataset_photo_embedding_model END,
+    description_text_embedding = CASE WHEN
+        (wines.name, wines.category, wines.color, wines.region, wines.grape_variety,
+         wines.description, wines.winery)
+        IS DISTINCT FROM
+        (EXCLUDED.name, EXCLUDED.category, EXCLUDED.color, EXCLUDED.region,
+         EXCLUDED.grape_variety, EXCLUDED.description, EXCLUDED.winery)
+        THEN NULL ELSE wines.description_text_embedding END,
+    description_text_embedding_model = CASE WHEN
+        (wines.name, wines.category, wines.color, wines.region, wines.grape_variety,
+         wines.description, wines.winery)
+        IS DISTINCT FROM
+        (EXCLUDED.name, EXCLUDED.category, EXCLUDED.color, EXCLUDED.region,
+         EXCLUDED.grape_variety, EXCLUDED.description, EXCLUDED.winery)
+        THEN NULL ELSE wines.description_text_embedding_model END,
     web_photo = CASE WHEN wines.slug IS DISTINCT FROM EXCLUDED.slug
         THEN NULL ELSE wines.web_photo END,
     web_photo_url = CASE WHEN wines.slug IS DISTINCT FROM EXCLUDED.slug
         THEN NULL ELSE wines.web_photo_url END,
     web_photo_embedding = CASE WHEN wines.slug IS DISTINCT FROM EXCLUDED.slug
-        THEN NULL ELSE wines.web_photo_embedding END
+        THEN NULL ELSE wines.web_photo_embedding END,
+    web_photo_embedding_model = CASE WHEN wines.slug IS DISTINCT FROM EXCLUDED.slug
+        THEN NULL ELSE wines.web_photo_embedding_model END
 """
 
 

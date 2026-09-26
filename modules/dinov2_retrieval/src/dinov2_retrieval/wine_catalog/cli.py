@@ -12,6 +12,8 @@ from ..config import get_database_url
 from .importer import import_csv
 from .migrations import apply_migrations
 from .scraper import scrape_wines
+from .embeddings import KINDS, generate_embeddings
+from .photo_manifest import build_photo_manifest, stage_manifest_photos, write_photo_manifest
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,6 +40,29 @@ def build_parser() -> argparse.ArgumentParser:
     scraper.add_argument("--interactive", action="store_true", help="open a persistent Playwright browser for manual CAPTCHA/age checks")
     scraper.add_argument("--cookie-jar", type=Path, help="defaults beside --photos-dir")
     scraper.add_argument("--browser-profile", type=Path, help="defaults beside --photos-dir")
+
+    manifest = commands.add_parser("photo-manifest", help="match CSV photo names to Strapi uploads")
+    manifest.add_argument("--database-url", help="overrides DATABASE_URL")
+    manifest.add_argument("--uploads-root", type=Path, required=True)
+    manifest.add_argument("--output", type=Path, required=True)
+
+    stage = commands.add_parser("stage-photos", help="copy referenced CSV photos for transfer")
+    stage.add_argument("--uploads-root", type=Path, required=True)
+    stage.add_argument("--photo-manifest", type=Path, required=True)
+    stage.add_argument("--output", type=Path, required=True)
+
+    embedder = commands.add_parser("embed", help="generate missing wine vectors on a GPU machine")
+    embedder.add_argument("--database-url", help="overrides DATABASE_URL")
+    embedder.add_argument("--kind", choices=("all", *KINDS), default="all")
+    embedder.add_argument("--uploads-root", type=Path)
+    embedder.add_argument("--photo-manifest", type=Path)
+    embedder.add_argument("--web-photos-root", type=Path, default=Path(os.getenv("WINE_PHOTOS_DIR", "data/web_photos")))
+    embedder.add_argument("--image-model", default="facebook/dinov2-small")
+    embedder.add_argument("--text-model", default="intfloat/multilingual-e5-base")
+    embedder.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
+    embedder.add_argument("--text-batch-size", type=_positive_int, default=16)
+    embedder.add_argument("--limit", type=_positive_int)
+    embedder.add_argument("--retry-failed", action="store_true")
     return parser
 
 
@@ -45,7 +70,18 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
-        result = _run_import(args) if args.command == "import-csv" else _run_scrape(args)
+        if args.command == "import-csv":
+            result = _run_import(args)
+        elif args.command == "scrape":
+            result = _run_scrape(args)
+        elif args.command == "photo-manifest":
+            result = _run_photo_manifest(args)
+        elif args.command == "stage-photos":
+            result = {"command": "stage-photos", "status": "ok", **stage_manifest_photos(
+                args.photo_manifest, args.uploads_root, args.output,
+            )}
+        else:
+            result = _run_embed(args)
     except Exception as exc:
         print(json.dumps({"command": args.command, "status": "failed", "error": str(exc)}, ensure_ascii=False))
         return 1
@@ -100,6 +136,38 @@ def _run_scrape(args: argparse.Namespace) -> dict[str, object]:
             browser_profile=args.browser_profile,
         )
     return {"command": "scrape", "status": "ok" if not summary["errors"] else "partial", **summary}
+
+
+def _run_photo_manifest(args: argparse.Namespace) -> dict[str, object]:
+    with _connect(args.database_url) as connection:
+        apply_migrations(connection)
+        names = [
+            row[0] for row in connection.execute(
+                "SELECT DISTINCT dataset_photo FROM wines "
+                "WHERE dataset_photo IS NOT NULL ORDER BY dataset_photo"
+            ).fetchall()
+        ]
+    rows = build_photo_manifest(names, args.uploads_root)
+    write_photo_manifest(rows, args.output)
+    counts = {status: sum(row["status"] == status for row in rows)
+              for status in ("matched", "ambiguous", "missing")}
+    return {"command": "photo-manifest", "status": "ok", "output": str(args.output),
+            "unique_photos": len(rows), **counts}
+
+
+def _run_embed(args: argparse.Namespace) -> dict[str, object]:
+    kinds = KINDS if args.kind == "all" else (args.kind,)
+    with _connect(args.database_url) as connection:
+        summary = generate_embeddings(
+            connection, kinds=kinds, uploads_root=args.uploads_root,
+            manifest_path=args.photo_manifest, web_photos_root=args.web_photos_root,
+            image_model=args.image_model, text_model=args.text_model,
+            device=args.device, text_batch_size=args.text_batch_size,
+            limit=args.limit, retry_failed=args.retry_failed,
+        )
+    errors = sum(item["errors"] for item in summary.values())
+    return {"command": "embed", "status": "partial" if errors else "ok",
+            "results": summary, "errors": errors}
 
 
 def _connect(database_url: str | None):
