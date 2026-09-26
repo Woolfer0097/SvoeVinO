@@ -44,7 +44,7 @@ def main() -> int:
         type=Path,
         nargs="?",
         default=Path(__file__).resolve().parent / "fixtures" / "manual_review" / "photos",
-        help="Directory containing source photos (defaults to the committed review set)",
+        help="Directory containing source photos (defaults to tests/fixtures/manual_review/photos)",
     )
     parser.add_argument("--outputs", type=Path, default=Path(__file__).resolve().parents[1] / "outputs")
     parser.add_argument("--url", default="http://127.0.0.1:8001/match")

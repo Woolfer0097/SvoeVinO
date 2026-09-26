@@ -49,8 +49,8 @@ First use may download PaddleOCR or E5 weights; inference itself is local.
 ## REST API
 
 Start the standalone OCR service from `modules/ocr` (the default published port
-is `8000`, unless `.env` sets `OCR_PORT`). Include `outputs/.gitkeep` in the
-commit so the bind-mounted output directory exists in a fresh checkout:
+is `8000`, unless `.env` sets `OCR_PORT`). The tracked `outputs/.gitkeep`
+keeps the bind-mounted output directory in a fresh checkout:
 
 ```bash
 docker compose up --build
@@ -213,7 +213,8 @@ input directory in a fresh checkout. Put your JPEG, PNG, WebP, BMP, or TIFF
 photos there, or pass another directory as the first argument to a run tool.
 The run tools sort filenames case-insensitively, copy images into a new
 `outputs/testN` directory as `image1`, `image2`, and so on, and record the
-original names in `manifest.json`. The marker TXT is ignored by the tools.
+original names in `manifest.json`. The marker TXT is ignored by the tools;
+photos placed in this input directory are ignored by Git.
 
 Start the OCR service and, from `modules/ocr`, run:
 
