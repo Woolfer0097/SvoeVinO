@@ -7,7 +7,7 @@ from pathlib import Path
 SRC = Path(__file__).resolve().parents[1] / "src"
 sys.path.insert(0, str(SRC))
 
-from wine_ocr.text_processing import E5TextEmbedder, TextEmbeddingError
+from wine_ocr.text_processing import E5TextEmbedder, TextEmbeddingError, prepare_embedding_text
 from wine_ocr.text_processing.embedding import split_query_text
 
 
@@ -33,6 +33,22 @@ class TextProcessingTests(unittest.TestCase):
         embedder = E5TextEmbedder()
         self.assertIsNone(embedder._model)
         self.assertIsNone(embedder._tokenizer)
+
+    def test_query_repairs_ocr_lookalikes_without_losing_years(self) -> None:
+        query = prepare_embedding_text("дehиcob 3akat camapa 2023", "3AKAT")
+        self.assertEqual(query, "закат денисов закат самара 2023")
+
+    def test_query_preserves_latin_titles_and_all_ocr_words(self) -> None:
+        query = prepare_embedding_text("velvet season 2020", "VELVET SEASON")
+        self.assertEqual(query, "velvet season velvet season 2020")
+
+    def test_query_repairs_central_wine_name(self) -> None:
+        query = prepare_embedding_text(
+            "denisov camapa kpachaa стрелка ry6in h 0", "KPACHAA СТРЕЛКА"
+        )
+        self.assertEqual(
+            query, "краснаа стрелка denisov самара краснаа стрелка ry6in h 0"
+        )
 
 
 if __name__ == "__main__":

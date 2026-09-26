@@ -89,7 +89,7 @@ class FakeOCRRuntime:
         self.received = data
         if self.error is not None:
             raise self.error
-        return SimpleNamespace(normalized_text=self.text)
+        return SimpleNamespace(normalized_text=self.text, candidate_name=None)
 
 
 class FakeTextEmbedder:

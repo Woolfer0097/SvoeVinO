@@ -85,7 +85,6 @@ class E5TextEmbedder:
                 chunks = split_query_text(text, self._tokenizer)
                 tokens = self._tokenizer(
                     [QUERY_PREFIX + chunk for chunk in chunks],
-                    max_length=MAX_MODEL_TOKENS,
                     padding=True,
                     truncation=False,
                     return_tensors="pt",

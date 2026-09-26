@@ -84,8 +84,11 @@ curl -F "file=@label.jpg" http://localhost:8000/match
 
 `/match` runs the existing OCR pipeline, converts its complete
 `normalized_text` into a multilingual E5 query vector, and compares that vector
-with `wines.description_text_embedding` in PostgreSQL. It returns only the
-catalog row IDs and scores:
+with `wines.description_text_embedding` in PostgreSQL. For the embedding query
+only, it repeats the likely central `candidate_name` once and repairs words made
+entirely of Cyrillic letters and visually similar Latin OCR characters (for
+example `3akat` → `закат`). The original OCR JSON and TXT stay unchanged.
+It returns only the catalog row IDs and scores:
 
 ```json
 {"top_10": {"123": 0.94, "456": 0.88}}

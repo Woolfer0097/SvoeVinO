@@ -15,13 +15,14 @@ from wine_ocr.text_processing import TextEmbedding
 
 
 class FakeOCRRuntime:
-    def __init__(self, text: str) -> None:
+    def __init__(self, text: str, candidate_name: str | None = None) -> None:
         self.text = text
+        self.candidate_name = candidate_name
         self.calls: list[bytes] = []
 
     def run_ocr_from_bytes(self, data: bytes, config: OCRConfig):
         self.calls.append(data)
-        return SimpleNamespace(normalized_text=self.text)
+        return SimpleNamespace(normalized_text=self.text, candidate_name=self.candidate_name)
 
 
 class FakeTextEmbedder:
@@ -44,7 +45,7 @@ class FakeRepository:
 
 class MatchingTests(unittest.TestCase):
     def test_full_pipeline_hands_ocr_text_to_embedding_and_comparison(self) -> None:
-        ocr = FakeOCRRuntime("красная стрелка 2023")
+        ocr = FakeOCRRuntime("красная стрелка 2023", "КРАСНАЯ СТРЕЛКА")
         embedder = FakeTextEmbedder()
         repository = FakeRepository()
 
@@ -54,7 +55,7 @@ class MatchingTests(unittest.TestCase):
         )
 
         self.assertEqual(ocr.calls, [b"image"])
-        self.assertEqual(embedder.calls, ["красная стрелка 2023"])
+        self.assertEqual(embedder.calls, ["красная стрелка красная стрелка 2023"])
         self.assertEqual(repository.calls, [((0.6, 0.8), "intfloat/multilingual-e5-base", 10)])
         self.assertEqual(result, {"top_10": {"42": 0.9}})
 
