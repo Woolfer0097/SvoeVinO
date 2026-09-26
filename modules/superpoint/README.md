@@ -14,7 +14,9 @@ src/superpoint/
 ├── config.py
 ├── contracts.py
 ├── cli.py
-├── entrypoints/cli.py
+├── entrypoints/
+│   ├── api.py                      # FastAPI + Swagger UI
+│   └── cli.py
 ├── application/
 │   ├── validate_image.py
 │   └── verify_photos.py
@@ -25,7 +27,9 @@ src/superpoint/
 ├── verification/
 │   ├── decision.py
 │   └── homography.py             # OpenCV RANSAC
-└── infrastructure/storage/local_storage.py
+└── infrastructure/storage/
+    ├── local_storage.py
+    └── upload_storage.py           # временные загрузки HTTP API
 ```
 
 Оба пути должны лежать внутри `DATA_ROOT`. Модуль не ходит в сеть за
@@ -99,9 +103,43 @@ DATA_ROOT=/data .venv/bin/python -m superpoint.cli validate \
 При первом `verify` веса скачиваются в `TORCH_HOME` с GitHub Releases
 `cvg/LightGlue`.
 
+## HTTP API и Swagger
+
+Сервис слушает только `127.0.0.1`. Порт на хосте — `API_PORT` (по умолчанию
+8001), внутри контейнера — 8000, чтобы не пересечься с DINOv2 на 8000.
+
+```bash
+cd modules/superpoint
+docker compose up -d
+docker compose ps    # дождаться healthy; первый старт качает веса и может быть дольше 120 с
+```
+
+Откройте <http://localhost:8001> — редирект на Swagger UI. «Try it out» уже
+включён. `verified: false` приходит с кодом 200: это вердикт, а не ошибка.
+
+| Раздел | Метод и путь | Что делает |
+| --- | --- | --- |
+| Проверка | `POST /verify` | два файла, `query` и `reference`; не сохраняются. В ответе `query_path` и `reference_path` — имена файлов, не пути на диске |
+| Служебное | `GET /health` | модель загружена: `model` и `device` (Docker healthcheck) |
+
+```bash
+curl -s -X POST http://localhost:8001/verify \
+  -F query=@data/queries/photo.jpg \
+  -F reference=@data/references/label.jpg
+```
+
+Локально без Docker, после `pip install -e '.[api,ml]'`:
+
+```bash
+DATA_ROOT=/data .venv/bin/uvicorn --factory superpoint.entrypoints.api:create_app \
+  --host 127.0.0.1 --port 8001
+```
+
 ## Запуск в Docker
 
-Compose содержит только сервис `superpoint`. Отдельного HTTP-сервера нет.
+Compose поднимает долгоживущий сервис `superpoint` командой `serve`.
+Разовый CLI по-прежнему через `docker compose run`: тот режим игнорирует
+`restart`.
 
 ```bash
 cd modules/superpoint
@@ -128,8 +166,13 @@ docker compose run --rm superpoint pytest
 Контейнер не требует NVIDIA runtime и libGL. `DEVICE=cuda` на этом образе
 не заработает: для GPU нужна отдельная сборка с CUDA-колёсами.
 
-`docker compose up` печатает справку CLI и завершается с кодом `0`.
-Healthcheck проверяет импорт модуля и каталог `DATA_ROOT=/data`.
+`docker compose up -d` запускает HTTP API и сам перезапускает контейнер,
+пока его не остановят `docker compose stop` / `down`. Healthcheck бьёт в
+`GET /health` на порту `PORT` (по умолчанию 8000) и проходит только после
+загрузки модели. Первый старт может занять больше 120 с: веса LightGlue
+скачиваются до того, как `/health` начнёт отвечать. Пока идёт загрузка,
+контейнер может быть `unhealthy`, но `restart` из-за этого его не
+останавливает — дождитесь `healthy`. Дальше веса берутся из `model-cache`.
 
 ## Тесты
 
@@ -139,5 +182,6 @@ cd modules/superpoint
 ```
 
 Обычный `pytest` не скачивает веса и не требует ML-зависимостей: матчер и
-RANSAC подменяются. Реальный SuperPoint+LightGlue используется только
-командой `verify` без внедрённого матчера.
+RANSAC подменяются. Тесты HTTP API пропускаются без extra `api` (и `httpx`
+из `dev`). Реальный SuperPoint+LightGlue используется только командой
+`verify` или `serve` без внедрённого матчера.

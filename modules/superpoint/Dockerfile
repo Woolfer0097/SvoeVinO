@@ -27,7 +27,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     && pip install --index-url https://download.pytorch.org/whl/cpu \
         'torch==2.4.1' 'torchvision==0.19.1' \
     && printf '%s\n' 'torch==2.4.1' 'torchvision==0.19.1' > /tmp/torch-constraints.txt \
-    && pip install -c /tmp/torch-constraints.txt '.[dev,ml]' \
+    && pip install -c /tmp/torch-constraints.txt '.[dev,ml,api]' \
     && (pip uninstall -y opencv-python || true) \
     && pip install --force-reinstall 'opencv-python-headless>=4.8,<5.0' \
     && python -c "import importlib.metadata as m, cv2, lightglue.utils, torch; names={d.metadata['Name'].lower() for d in m.distributions()}; assert 'opencv-python' not in names; print(torch.__version__, cv2.__version__)"
@@ -55,8 +55,10 @@ USER app
 ENV DATA_ROOT=/data \
     DEVICE=auto
 
-HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
-    CMD python -c "import superpoint; from superpoint.config import get_data_root; get_data_root()"
+EXPOSE 8000
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+    CMD python -c "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:' + os.environ.get('PORT', '8000') + '/health', timeout=3)"
 
 ENTRYPOINT ["sh", "/usr/local/bin/superpoint-entrypoint.sh"]
-CMD ["--help"]
+CMD ["serve"]
