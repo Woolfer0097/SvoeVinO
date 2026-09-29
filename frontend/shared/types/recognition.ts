@@ -1,68 +1,63 @@
-/*
- * Контракт асинхронного распознавания: фото ставится в очередь, клиент
- * периодически опрашивает статус (polling), пока задача не завершится.
- *
- *   POST {apiBase}/search            multipart: file, top_k   → 202 JobAccepted
- *   GET  {apiBase}/status/{job_id}                             → 200 JobStatus
- *                                                                404 — задача не найдена или устарела
- *
- * Результат готовой задачи — SearchResponse из
- * modules/dinov2_retrieval/src/dinov2_retrieval/contracts.py.
- */
-
-/** Кандидат поиска (WineCandidate в dinov2_retrieval). */
+/** Nuxt same-origin proxy -> real wine_pipeline async API. */
 export interface WineCandidate {
   wine_id: string;
   slug: string;
   score: number;
-  distance: number;
+  distance?: number;
   best_image_uri: string;
-  // Поля карточки вина — план: бэкенд их пока не возвращает.
   name?: string;
   winery?: string;
   region?: string;
   grape_variety?: string;
   color?: string;
+  category?: string;
+  description?: string;
+  wine_url?: string;
+  web_photo_uri?: string | null;
+  vintage?: number | null;
+  attributes?: { label: string; value: string }[];
 }
-
-/** Top-K разных вин для одного фото (SearchResponse в dinov2_retrieval). */
+export interface VintageCheck {
+  detected_year: number | null;
+  state: "not_read" | "ambiguous" | "matched" | "unverified" | "mismatch";
+}
+/** Advisory ranking diagnostics; the score is not a calibrated probability. */
+export interface MatchDecision {
+  accepted: boolean;
+  calibrated: boolean;
+  score: number;
+  margin: number | null;
+  reason: string;
+  policy_version: string;
+}
 export interface SearchResponse {
   request_id: string;
   status: "ok" | "no_results";
   model_name: string;
   query_embedding_dimension: number;
   candidates: WineCandidate[];
+  slug?: string;
   message?: string | null;
+  warnings?: string[];
+  fusion_mode?: string;
+  fusion_weights?: { visual: number; ocr: number };
+  vintage_check?: VintageCheck;
+  decision?: MatchDecision;
 }
-
 export type JobState = "queued" | "processing" | "done" | "failed";
-
-/** Этап обработки на сервере; null — задача ещё в очереди. */
-export type JobStage = "prepare" | "search" | "rank";
-
-/** Ответ на загрузку фото: задача принята (HTTP 202). */
-export interface JobAccepted {
-  job_id: string;
-  state: JobState;
-  /** Через сколько миллисекунд имеет смысл спросить статус. */
-  poll_after_ms?: number;
-}
-
-export interface JobError {
-  code: string;
-  message: string;
-}
-
-/** Ответ эндпоинта статуса. */
+export type JobStage = "prepare" | "preprocess" | "preprocess_done" | "search" | "rank" | "dino_started" | "dino_done"
+  | "superpoint_started" | "superpoint_done" | "superpoint_failed"
+  | "ocr_started" | "ocr_done" | "ocr_failed" | "ocr_rescue_started" | "ocr_rescue_done" | "ocr_rescue_failed"
+  | "fusion" | "color" | "vintage" | "done" | "failed";
+export interface JobAccepted { job_id: string; state: JobState; poll_after_ms?: number }
+export interface JobError { code: string; message: string }
 export interface JobStatus {
   job_id: string;
   state: JobState;
   stage: JobStage | null;
-  /** Общий прогресс задачи от 0 до 1. */
   progress: number;
   poll_after_ms?: number;
-  /** Заполнен, когда state = "done". */
   result: SearchResponse | null;
-  /** Заполнен, когда state = "failed". */
   error: JobError | null;
+  history?: { stage: JobStage; progress: number; elapsed_ms: number }[];
 }

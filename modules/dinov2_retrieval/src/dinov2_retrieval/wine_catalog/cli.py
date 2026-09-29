@@ -60,6 +60,7 @@ def build_parser() -> argparse.ArgumentParser:
     embedder.add_argument("--image-model", default=DEFAULT_IMAGE_MODEL)
     embedder.add_argument("--text-model", default=DEFAULT_TEXT_MODEL)
     embedder.add_argument("--device", choices=("auto", "cuda", "cpu"), default="auto")
+    embedder.add_argument("--image-dtype", choices=("float32", "float16"), default="float32")
     embedder.add_argument("--text-batch-size", type=_positive_int, default=16)
     embedder.add_argument("--limit", type=_positive_int)
     embedder.add_argument("--retry-failed", action="store_true")
@@ -162,7 +163,8 @@ def _run_embed(args: argparse.Namespace) -> dict[str, object]:
             connection, kinds=kinds, uploads_root=args.uploads_root,
             manifest_path=args.photo_manifest, web_photos_root=args.web_photos_root,
             image_model=args.image_model, text_model=args.text_model,
-            device=args.device, text_batch_size=args.text_batch_size,
+            device=args.device, image_dtype=args.image_dtype,
+            text_batch_size=args.text_batch_size,
             limit=args.limit, retry_failed=args.retry_failed,
         )
     errors = sum(item["errors"] for item in summary.values())

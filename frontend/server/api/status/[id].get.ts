@@ -1,18 +1,12 @@
-/*
- * Мок: статус задачи распознавания. Клиент опрашивает его периодически,
- * пока state не станет "done" или "failed".
- */
 import type { JobStatus } from "#shared/types/recognition";
-
-export default defineEventHandler((event): JobStatus => {
+import { pipelineError } from "../../utils/pipeline";
+export default defineEventHandler(async (event): Promise<JobStatus> => {
   setResponseHeader(event, "Cache-Control", "no-store");
-
-  const job = findJob(getRouterParam(event, "id") ?? "");
-  if (!job) {
-    throw createError({ statusCode: 404, data: { detail: "Job not found or expired" } });
-  }
-  if (isFlakyFailure(job)) {
-    throw createError({ statusCode: 503, data: { detail: "Status is temporarily unavailable" } });
-  }
-  return statusOf(job);
+  const id = getRouterParam(event, "id") ?? "";
+  if (!/^[a-f0-9]{32}$/.test(id)) throw createError({ statusCode: 404, message: "Задача не найдена" });
+  try {
+    return await $fetch<JobStatus>(`${useRuntimeConfig(event).pipelineUrl}/image/status`, {
+      query: { job_id: id }, retry: 0, timeout: 10_000,
+    });
+  } catch (error) { throw pipelineError(error); }
 });

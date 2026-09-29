@@ -36,6 +36,15 @@ def _as_optional_int(value: str | int | None) -> int | None:
     return None if value is None or value == "" else _as_int(value, default=1)
 
 
+def _as_limit_type(value: str | None) -> str | None:
+    if not value:
+        return None
+    value = value.strip().lower()
+    if value not in {"min", "max"}:
+        raise ValueError("Text detector limit type must be min or max")
+    return value
+
+
 def _as_optional_probability(value: str | float | None) -> float | None:
     if value is None or value == "":
         return None
@@ -73,6 +82,7 @@ class OCRConfig:
     use_doc_unwarping: bool = True
     use_textline_orientation: bool = True
     text_det_limit_side_len: int | None = None
+    text_det_limit_type: str | None = None
     text_det_thresh: float | None = None
     text_det_box_thresh: float | None = None
     text_detection_model_name: str | None = None
@@ -108,6 +118,7 @@ class OCRConfig:
                 text_det_limit_side_len=_as_optional_int(
                     os.getenv("OCR_TEXT_DET_LIMIT_SIDE_LEN")
                 ),
+                text_det_limit_type=_as_limit_type(os.getenv("OCR_TEXT_DET_LIMIT_TYPE")),
                 text_det_thresh=_as_optional_probability(
                     os.getenv("OCR_TEXT_DET_THRESH")
                 ),

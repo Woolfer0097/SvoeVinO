@@ -54,6 +54,30 @@ python3.12 -m venv .venv
 - `cx` и `radius` описывают корпус бутылки в пикселях, а не центр и половину ширины этикетки.
 - Маска бутылки может иметь размер полного ориентированного изображения либо `bottle_bbox`.
 
+## HTTP-сервис в общем pipeline
+
+`docker compose -f compose.pipeline.yml up -d --build` из корня запускает
+внутренний CPU-сервис `preprocessing:8000`. Backend вызывает
+`POST /preprocess`, multipart `image`, перед DINO/SuperPoint и OCR.
+Ответ — PNG-ветви в base64 и metadata; изображения не записываются на диск.
+Самостоятельный запуск: `pip install -e '.[api]'`, затем
+`uvicorn wine_label_preprocessing.api:create_app --factory --port 8000`.
+
+Сервис использует существующий `preprocess()`, не дублирует алгоритмы:
+EXIF → RGB → пропорциональный downscale без увеличения → раздельные ветви.
+Visual: max side 1600, фотометрия выключена. OCR: max side 1920, mild brightness
+0.9–1.1 и CLAHE 1.5. Unsharp по умолчанию выключен; его можно включить отдельно.
+Параметры: `PREPROCESS_VISUAL_MAX_SIDE`, `PREPROCESS_OCR_MAX_SIDE` (128–2048),
+`PREPROCESS_OCR_MILD=true|false`, `PREPROCESS_OCR_UNSHARP=true|false`.
+Это рабочие лимиты, а не доказанный оптимум на всех фото; влияние на качество
+нужно проверять на валидации команды. Для DINO остаётся штатный processor модели.
+
+Лимит входа 10 MiB / 25 млн пикселей. CPU OpenCV ограничен двумя потоками.
+В HTTP-контракте пока нет bbox/маски: crop — полное изображение, развёртка
+честно пропускается. Это не детектор этикетки и не автоматический DewarpNet.
+Размеры, операции и тайминги доступны в `result.preprocessing` общего backend,
+этап preprocessing виден в истории `/image/status`.
+
 ## Python API
 
 ```python

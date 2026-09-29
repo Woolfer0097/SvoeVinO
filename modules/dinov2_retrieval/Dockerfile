@@ -17,6 +17,8 @@ RUN python -m venv /opt/venv
 # Pillow (torchvision's only dependency missing there in practice: its index
 # page is huge and times out) is installed from PyPI first.
 ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_VERSION=2.8.0
+ARG TORCHVISION_VERSION=0.23.0
 
 # Dependencies are installed from a stub package first so that code changes
 # do not reinstall torch/transformers on every rebuild. The pip cache mount
@@ -26,7 +28,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     mkdir -p src/dinov2_retrieval \
     && touch src/dinov2_retrieval/__init__.py \
     && pip install 'Pillow>=10.0,<13.0' \
-    && pip install --index-url "${TORCH_INDEX_URL}" 'torch>=2.7,<3.0' 'torchvision>=0.22,<1.0' \
+    && pip install --index-url "${TORCH_INDEX_URL}" "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
     && pip install '.[dev,ml,db,api]'
 
 COPY src ./src

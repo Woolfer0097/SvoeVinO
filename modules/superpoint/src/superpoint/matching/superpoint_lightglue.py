@@ -126,6 +126,11 @@ class SuperPointLightGlueMatcher:
                 device="cpu",
                 resize=self.resize,
             )
+            if self._device_name.startswith("cuda"):
+                # Pinned LightGlue match_pair uses non_blocking=True when
+                # copying to CPU. Reading tolist() before those copies finish
+                # can produce stale/garbage keypoints and match indices.
+                self._torch.cuda.synchronize(self._device_name)
         return prediction_from_features(feats0, feats1, matches01)
 
 
@@ -146,6 +151,8 @@ def prediction_from_features(
     query_points: list[tuple[float, float]] = []
     reference_points: list[tuple[float, float]] = []
     for left, right in matches:
+        if left < 0 or right < 0:
+            raise RuntimeError("LightGlue returned an out-of-range match index")
         try:
             query_points.append(keypoints_query[left])
             reference_points.append(keypoints_reference[right])

@@ -27,12 +27,17 @@ class EmbeddingRepository(Protocol):
 
 
 SEARCH_SQL = """
-SELECT id, description_text_embedding <=> %(query)s AS distance
-FROM wines
-WHERE description_text_embedding IS NOT NULL
-  AND description_text_embedding_model = %(model_name)s
-  AND vector_dims(description_text_embedding) = %(dimension)s
-ORDER BY description_text_embedding <=> %(query)s, id
+SELECT id, distance FROM (
+    SELECT DISTINCT ON (slug)
+        id, slug, description_text_embedding <=> %(query)s AS distance
+    FROM wines
+    WHERE description_text_embedding IS NOT NULL
+      AND description_text_embedding_model = %(model_name)s
+      AND vector_dims(description_text_embedding) = %(dimension)s
+      AND slug IS NOT NULL AND slug <> ''
+    ORDER BY slug, description_text_embedding <=> %(query)s, id
+) AS distinct_wines
+ORDER BY distance, id
 LIMIT %(limit)s
 """
 

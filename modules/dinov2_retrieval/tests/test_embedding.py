@@ -13,9 +13,10 @@ DIMENSION = 1536
 
 
 class FakeTensor:
-    def __init__(self, values, device: str = "cpu") -> None:
+    def __init__(self, values, device: str = "cpu", dtype: str = "float32") -> None:
         self.values = values
         self.device = device
+        self.dtype = dtype
 
     def __getitem__(self, item):
         if isinstance(item, tuple):
@@ -24,8 +25,18 @@ class FakeTensor:
             return FakeTensor([row[token_index] for row in rows], self.device)
         return self.values[item]
 
-    def to(self, device):
-        self.device = str(device)
+    def to(self, device=None, *, dtype=None):
+        if device is not None:
+            self.device = str(device)
+        if dtype is not None:
+            self.dtype = dtype
+        return self
+
+    def is_floating_point(self):
+        return True
+
+    def float(self):
+        self.dtype = "float32"
         return self
 
     def detach(self):
@@ -73,6 +84,8 @@ class FakeInferenceMode:
 
 
 class FakeTorch:
+    float16 = "float16"
+
     def __init__(self, cuda_available: bool) -> None:
         self.cuda = SimpleNamespace(is_available=lambda: cuda_available)
         self.nn = SimpleNamespace(functional=FakeFunctional())
@@ -100,12 +113,14 @@ class FakeProcessor:
 class FakeModel:
     def __init__(self) -> None:
         self.to_device = None
+        self.to_dtype = None
         self.eval_calls = 0
         self.calls = 0
         self.received_inputs = None
 
-    def to(self, device):
+    def to(self, device, *, dtype=None):
         self.to_device = str(device)
+        self.to_dtype = dtype
         return self
 
     def eval(self):
@@ -198,6 +213,41 @@ def test_dinov2_model_and_processor_load_once(monkeypatch) -> None:
     assert processor_loads == 1
     assert model_loads == 1
     assert model.calls == 2
+
+
+def test_half_precision_is_used_when_loading_model_and_moving_inputs(monkeypatch) -> None:
+    from dinov2_retrieval.embedding import dinov2_embedder as module
+
+    model = FakeModel()
+    processor = FakeProcessor()
+    loaded_options = {}
+
+    class AutoModel:
+        @classmethod
+        def from_pretrained(cls, model_name, **options):
+            loaded_options.update(options)
+            return model
+
+    transformers = SimpleNamespace(
+        AutoImageProcessor=SimpleNamespace(from_pretrained=lambda name: processor),
+        AutoModel=AutoModel,
+    )
+    monkeypatch.setattr(module, "import_module", lambda name: transformers)
+    embedder = DinoV2Embedder(
+        torch_module=FakeTorch(cuda_available=True), dtype="float16"
+    )
+    values = embedder.embed(Image.new("RGB", (8, 4)))
+
+    assert loaded_options == {"torch_dtype": "float16", "low_cpu_mem_usage": True}
+    assert model.to_dtype == "float16"
+    assert model.received_inputs["pixel_values"].dtype == "float16"
+    assert len(values) == DIMENSION
+    assert sum(value * value for value in values) == pytest.approx(1.0)
+
+
+def test_invalid_precision_is_rejected_before_loading_dependencies() -> None:
+    with pytest.raises(ValueError, match="dtype must be"):
+        DinoV2Embedder(dtype="int8")
 
 
 def fake_transformers(processor, model, loaded_names: list[str]):

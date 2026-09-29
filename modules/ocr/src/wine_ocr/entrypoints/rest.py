@@ -7,11 +7,12 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 from starlette.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
 
 from ..application.matching import match_image_from_bytes
 from ..application.runtime import CachedOCRRuntime
 from ..config import OCRConfig
-from ..embedding_comparison import EmbeddingComparisonError, PostgresEmbeddingRepository
+from ..embedding_comparison import EmbeddingComparisonError, PostgresEmbeddingRepository, compare_embedding
 from ..exceptions import (
     ConfigurationError,
     ImageDecodeError,
@@ -25,6 +26,22 @@ app = FastAPI(title="Wine OCR", version="0.1.0")
 ocr_runtime = CachedOCRRuntime()
 text_embedder = E5TextEmbedder()
 embedding_repository = PostgresEmbeddingRepository()
+
+
+class TextMatchInput(BaseModel):
+    text: str = Field(min_length=1, max_length=2400)
+
+
+@app.post("/match/text")
+async def match_text(body: TextMatchInput):
+    """Match user-provided wine facts using the existing E5 encoder/catalog."""
+    def search():
+        embedding = text_embedder.embed(body.text.strip())
+        return compare_embedding(embedding, embedding_repository, top_k=10)
+    try:
+        return await run_in_threadpool(search)
+    except (TextEmbeddingError, EmbeddingComparisonError) as exc:
+        raise HTTPException(503, "Text matching unavailable") from exc
 
 
 @app.get("/health")
@@ -62,7 +79,9 @@ async def recognize_image_txt(file: UploadFile = File(...)) -> PlainTextResponse
 
 
 @app.post("/match")
-async def match_image(file: UploadFile = File(...)) -> JSONResponse:
+async def match_image(
+    file: UploadFile = File(...), include_evidence: bool = False,
+) -> JSONResponse:
     """Recognize a photo, embed all OCR text, and return ten catalog IDs."""
 
     try:
@@ -75,6 +94,7 @@ async def match_image(file: UploadFile = File(...)) -> JSONResponse:
             ocr_runtime=ocr_runtime,
             text_embedder=text_embedder,
             repository=embedding_repository,
+            include_evidence=include_evidence,
         )
     except ConfigurationError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc

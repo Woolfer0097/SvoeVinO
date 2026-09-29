@@ -5,7 +5,9 @@ SuperPoint, соответствия строит LightGlue из репозит�
 [cvg/LightGlue](https://github.com/cvg/LightGlue). Совпадение принимается
 только если достаточно соответствий согласованы одной гомографией (RANSAC).
 
-PostgreSQL, pgvector, OCR, Airflow, DINOv2 и frontend не подключены.
+HTTP-сервис читает эталонные фотографии из PostgreSQL (`reference_images`)
+и перепроверяет список кандидатов DINOv2. Общий backend связывает этот сервис
+с DINOv2 и OCR по HTTP; межмодульных Python-импортов нет.
 
 ## Структура
 
@@ -200,3 +202,9 @@ cd modules/superpoint
 RANSAC подменяются. Тесты HTTP API пропускаются без extra `api` (и `httpx`
 из `dev`). Реальный SuperPoint+LightGlue используется только командой
 `verify` или `serve` без внедрённого матчера.
+# GPU integration
+
+Set `DEVICE=cuda`, use CUDA-enabled Torch wheels and pass a GPU into Docker.
+The common stack is configured in the root `compose.pipeline.yml`.
+The pinned LightGlue utility copies results GPU→CPU asynchronously;
+the matcher synchronizes CUDA before converting them to Python lists.

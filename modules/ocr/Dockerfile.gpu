@@ -1,0 +1,11 @@
+# CPU Paddle is replaced, not installed alongside the GPU distribution.
+# Torch CUDA and Paddle CUDA versions must agree with the host driver.
+FROM wine-ocr-cuda-base AS gpu
+USER root
+ARG PADDLE_INDEX_URL=https://www.paddlepaddle.org.cn/packages/stable/cu126/
+RUN pip uninstall -y paddlepaddle \
+    && pip install --no-cache-dir paddlepaddle-gpu==3.2.2 \
+        --index-url "${PADDLE_INDEX_URL}" --extra-index-url https://pypi.org/simple \
+    && python -c "import paddle; assert paddle.is_compiled_with_cuda()"
+USER app
+ENV OCR_DEVICE=gpu:0 TEXT_EMBEDDING_DEVICE=cuda

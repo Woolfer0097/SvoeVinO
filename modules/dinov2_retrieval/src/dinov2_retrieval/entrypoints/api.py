@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 import uuid
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager, closing
@@ -220,7 +221,10 @@ class EmbedderProvider:
                 if self._embedder is None:
                     from ..embedding.dinov2_embedder import DinoV2Embedder
 
-                    self._embedder = DinoV2Embedder()
+                    self._embedder = DinoV2Embedder(
+                        device=os.getenv("DINO_DEVICE") or None,
+                        dtype=os.getenv("DINO_DTYPE", "float32"),
+                    )
         return self._embedder
 
 

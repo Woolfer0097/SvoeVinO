@@ -1,0 +1,17 @@
+# Production: use only after verifying aggregate VRAM and the CUDA driver.
+services:
+  ocr-cuda-base:
+    profiles: [build-gpu-base]
+    image: wine-ocr-cuda-base
+    build:
+      context: ./modules/ocr
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu126
+  ocr:
+    build:
+      context: ./modules/ocr
+      dockerfile: Dockerfile.gpu
+    gpus: all
+    environment:
+      OCR_DEVICE: gpu:0
+      TEXT_EMBEDDING_DEVICE: cuda

@@ -21,12 +21,15 @@ RUN apt-get update \
 # Dependencies are installed from a stub package first so that code changes
 # do not reinstall torch or LightGlue on every rebuild.
 COPY pyproject.toml ./
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+ARG TORCH_VERSION=2.4.1
+ARG TORCHVISION_VERSION=0.19.1
 RUN --mount=type=cache,target=/root/.cache/pip \
     mkdir -p src/superpoint \
     && touch src/superpoint/__init__.py \
-    && pip install --index-url https://download.pytorch.org/whl/cpu \
-        'torch==2.4.1' 'torchvision==0.19.1' \
-    && printf '%s\n' 'torch==2.4.1' 'torchvision==0.19.1' > /tmp/torch-constraints.txt \
+    && pip install --index-url "${TORCH_INDEX_URL}" \
+        "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" \
+    && printf '%s\n' "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" > /tmp/torch-constraints.txt \
     && pip install -c /tmp/torch-constraints.txt '.[dev,ml,api]' \
     && (pip uninstall -y opencv-python || true) \
     && pip install --force-reinstall 'opencv-python-headless>=4.8,<5.0' \

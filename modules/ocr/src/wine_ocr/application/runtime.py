@@ -23,6 +23,7 @@ class OCREngineKey:
     use_doc_unwarping: bool
     use_textline_orientation: bool
     text_det_limit_side_len: int | None
+    text_det_limit_type: str | None
     text_det_thresh: float | None
     text_det_box_thresh: float | None
     text_detection_model_name: str | None
@@ -38,6 +39,7 @@ class OCREngineKey:
             use_doc_unwarping=config.use_doc_unwarping,
             use_textline_orientation=config.use_textline_orientation,
             text_det_limit_side_len=config.text_det_limit_side_len,
+            text_det_limit_type=config.text_det_limit_type,
             text_det_thresh=config.text_det_thresh,
             text_det_box_thresh=config.text_det_box_thresh,
             text_detection_model_name=config.text_detection_model_name,

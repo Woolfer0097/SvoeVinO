@@ -2,7 +2,7 @@
 export default defineNuxtConfig({
   compatibilityDate: "2026-09-28",
   devtools: { enabled: false },
-  css: ["~/assets/css/main.css"],
+  css: ["~/assets/css/main.css", "~/assets/css/minimal.css"],
 
   app: {
     head: {
@@ -11,7 +11,7 @@ export default defineNuxtConfig({
       // viewport-fit=cover — чтобы учитывать вырез и полосу «домой» через env(safe-area-inset-*).
       viewport: "width=device-width, initial-scale=1, viewport-fit=cover",
       meta: [
-        { name: "description", content: "Прототип: загрузите фото бутылки и посмотрите самые похожие вина из каталога российских вин." },
+        { name: "description", content: "Сфотографируйте этикетку: карточка вина, описание и ссылка на Вино своё." },
         { name: "theme-color", content: "#FBF8F4" },
       ],
       link: [
@@ -32,11 +32,13 @@ export default defineNuxtConfig({
   // Любое значение переопределяется переменной окружения NUXT_PUBLIC_*,
   // например NUXT_PUBLIC_API_BASE=http://localhost:8000.
   runtimeConfig: {
+    pipelineUrl: "http://127.0.0.1:8080",
+    dinoUrl: "http://127.0.0.1:8000",
     public: {
-      // Базовый адрес API распознавания. "/api" — встроенный мок из server/api.
+      // Same-origin Nitro proxy к настоящему wine_pipeline.
       apiBase: "/api",
-      // Показывать плашку «Демо-данные» (мок отдаёт вымышленные вина).
-      demoData: true,
+      // Только реальные данные каталога.
+      demoData: false,
       // Сколько разных вин просить у поиска (как DEFAULT_TOP_K в бэкенде).
       topK: 20,
       // Максимальный размер фото (как MAX_IMAGE_SIZE_BYTES в бэкенде, 10 МиБ).
@@ -44,7 +46,7 @@ export default defineNuxtConfig({
       // Polling: пауза между запросами статуса, если сервер не прислал poll_after_ms.
       pollIntervalMs: 1000,
       // Сколько ждать результата, прежде чем показать ошибку.
-      pollTimeoutMs: 90_000,
+      pollTimeoutMs: 300_000,
       // Сколько подряд неудачных запросов статуса терпим до ошибки.
       maxPollErrors: 3,
     },

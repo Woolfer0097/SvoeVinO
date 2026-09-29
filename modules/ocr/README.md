@@ -275,3 +275,11 @@ python -m compileall src tests
 
 These checks are functional tests for code paths that do not perform OCR
 inference. They are not an OCR quality benchmark.
+# Common pipeline / GPU
+
+Root `compose.pipeline.yml` runs DINO/SuperPoint on GPU and OCR/E5 on CPU
+for a 4 GiB workstation. `compose.pipeline.gpu.yml` additionally moves
+PaddleOCR/E5 to GPU using `Dockerfile.gpu`; build its CUDA base first
+as described in `modules/wine_pipeline/README.md`.
+Text search returns ten distinct slugs even when the source export contains
+multiple rows for one wine. The orchestrator maps returned row IDs to slugs.

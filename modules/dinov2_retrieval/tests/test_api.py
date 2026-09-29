@@ -111,7 +111,7 @@ def test_embedder_provider_loads_model_once(monkeypatch: pytest.MonkeyPatch) -> 
 
     created: list[FakeEmbedder] = []
 
-    def fake_factory() -> FakeEmbedder:
+    def fake_factory(**options) -> FakeEmbedder:
         created.append(FakeEmbedder())
         return created[-1]
 
@@ -120,6 +120,22 @@ def test_embedder_provider_loads_model_once(monkeypatch: pytest.MonkeyPatch) -> 
 
     assert provider.get() is provider.get()
     assert len(created) == 1
+
+
+def test_embedder_provider_respects_gpu_environment(monkeypatch) -> None:
+    from dinov2_retrieval.embedding import dinov2_embedder
+
+    monkeypatch.setenv("DINO_DEVICE", "cuda")
+    monkeypatch.setenv("DINO_DTYPE", "float16")
+    captured = {}
+
+    def factory(**options):
+        captured.update(options)
+        return FakeEmbedder()
+
+    monkeypatch.setattr(dinov2_embedder, "DinoV2Embedder", factory)
+    EmbedderProvider().get()
+    assert captured == {"device": "cuda", "dtype": "float16"}
 
 
 
@@ -437,7 +453,7 @@ def test_model_is_loaded_once_at_startup(
     monkeypatch.setenv("DATA_ROOT", str(tmp_path))
     created: list[FakeEmbedder] = []
 
-    def fake_factory() -> FakeEmbedder:
+    def fake_factory(**options) -> FakeEmbedder:
         created.append(FakeEmbedder())
         return created[-1]
 

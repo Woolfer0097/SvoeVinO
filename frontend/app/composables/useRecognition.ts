@@ -100,7 +100,6 @@ export function useRecognition() {
   async function upload(file: File, scenario: string | undefined, signal: AbortSignal): Promise<JobAccepted> {
     const form = new FormData();
     form.append("file", file, file.name || "photo.jpg");
-    form.append("top_k", String(config.topK));
     try {
       return await $fetch<JobAccepted>(`${config.apiBase}/search`, {
         method: "POST",
@@ -170,7 +169,9 @@ export function useRecognition() {
       const status = await poll(accepted, signal);
       const response = status.result;
       result.value = response;
-      phase.value = response && response.status === "ok" && response.candidates.length ? "done" : "empty";
+      // A weak match still has a useful Top-1. Also show candidates from older
+      // jobs that used no_results to indicate uncertainty rather than emptiness.
+      phase.value = response?.candidates.length ? "done" : "empty";
     } catch (error) {
       if (signal.aborted) return;
       problem.value =

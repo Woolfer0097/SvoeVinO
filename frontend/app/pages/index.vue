@@ -1,12 +1,7 @@
 <script setup lang="ts">
-/*
- * Единственная страница: загрузка фото → polling статуса → похожие вина.
- * ?demo=1 — поиск на сгенерированном фото; ?scenario=slow|error|empty|flaky —
- * демо-сценарии встроенного мок-сервера.
- */
+/* Единственная страница: фото → настоящий pipeline → одна карточка вина. */
 import type { PhotoSource } from "~/utils/photo";
 
-const route = useRoute();
 const config = useRuntimeConfig().public;
 const recognition = useRecognition();
 const { phase, stage, progress, jobId, result, problem, isBusy } = recognition;
@@ -16,9 +11,10 @@ const galleryInput = ref<HTMLInputElement>();
 const hero = ref<{ focus: () => void }>();
 const uploadError = ref<string | null>(null);
 const previewUrl = ref<string | null>(null);
+const cameraOpen = ref(false);
+const ready = ref(false);
 
 const maxMb = formatMb(config.maxBytes);
-const scenario = computed(() => (typeof route.query.scenario === "string" ? route.query.scenario : undefined));
 
 function setPreview(file: File) {
   if (previewUrl.value) URL.revokeObjectURL(previewUrl.value);
@@ -30,6 +26,10 @@ function focusUpload() {
 }
 
 function openPicker(source: PhotoSource = "camera") {
+  if (source === "camera" && window.isSecureContext && typeof navigator.mediaDevices?.getUserMedia === "function") {
+    cameraOpen.value = true;
+    return;
+  }
   const input = source === "camera" ? cameraInput.value : galleryInput.value;
   if (!input) return;
   input.value = "";
@@ -47,7 +47,7 @@ function handleFile(file: File) {
   }
   uploadError.value = null;
   setPreview(file);
-  recognition.start(file, { scenario: scenario.value });
+  recognition.start(file);
 }
 
 function onFileChange(event: Event) {
@@ -63,7 +63,7 @@ function cancel() {
 }
 
 function retry() {
-  recognition.retry({ scenario: scenario.value });
+  recognition.retry();
 }
 
 const { isDragging } = useFileDrop(handleFile, () => !isBusy.value);
@@ -73,8 +73,8 @@ function onKeydown(event: KeyboardEvent) {
 }
 
 onMounted(() => {
+  ready.value = true;
   document.addEventListener("keydown", onKeydown);
-  if (route.query.demo !== undefined) makeDemoPhoto().then(handleFile);
 });
 
 onBeforeUnmount(() => {
@@ -84,8 +84,8 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="page" :class="{ 'page--with-bar': phase === 'done' }">
-    <AppHeader :demo="config.demoData" />
+  <div class="page" :data-ready="ready" :class="{ 'page--with-bar': phase === 'done' }">
+    <AppHeader :demo="false" />
 
     <main>
       <Transition name="view" mode="out-in">
@@ -107,15 +107,12 @@ onBeforeUnmount(() => {
           :preview-url="previewUrl"
           @pick="openPicker('camera')"
         />
-        <MessageCard
-          v-else-if="phase === 'empty'"
-          key="empty"
-          kind="empty"
-          title="Каталог пока пуст"
-          message="В базе ещё нет эталонных фотографий — сравнивать не с чем. Когда каталог проиндексируют, поиск заработает."
-          primary-label="Сфотографировать другое"
-          @primary="openPicker('camera')"
-        />
+        <section v-else-if="phase === 'empty'" key="empty" class="result-view">
+          <MessageCard kind="empty" title="Не найдено вариантов в каталоге"
+            message="Снимите одну этикетку крупнее, без бликов, и попробуйте ещё раз."
+            primary-label="Сфотографировать ещё раз" @primary="openPicker('camera')" />
+          <RecognitionFeedback v-if="result" :key="result.request_id" :job-id="result.request_id" unrecognized />
+        </section>
         <MessageCard
           v-else-if="phase === 'error' && problem"
           key="error"
@@ -127,7 +124,7 @@ onBeforeUnmount(() => {
           @primary="retry"
           @secondary="openPicker('gallery')"
         />
-        <UploadHero v-else key="upload" ref="hero" :error="uploadError" :max-mb="maxMb" @pick="openPicker" />
+        <UploadHero v-else key="upload" ref="hero" :ready="ready" :error="uploadError" :max-mb="maxMb" @pick="openPicker" />
       </Transition>
     </main>
 
@@ -146,6 +143,7 @@ onBeforeUnmount(() => {
       ref="cameraInput"
       class="visually-hidden"
       type="file"
+      :disabled="!ready"
       accept="image/jpeg,image/png,image/webp"
       capture="environment"
       tabindex="-1"
@@ -156,11 +154,18 @@ onBeforeUnmount(() => {
       ref="galleryInput"
       class="visually-hidden"
       type="file"
+      :disabled="!ready"
       accept="image/jpeg,image/png,image/webp"
       tabindex="-1"
       aria-hidden="true"
       @change="onFileChange"
     >
     <DropOverlay :visible="isDragging" />
+    <CameraCapture
+      v-if="cameraOpen"
+      @close="cameraOpen = false; focusUpload()"
+      @capture="cameraOpen = false; handleFile($event)"
+      @fallback="cameraOpen = false; openPicker('gallery')"
+    />
   </div>
 </template>

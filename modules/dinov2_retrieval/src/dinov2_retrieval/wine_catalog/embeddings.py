@@ -79,6 +79,7 @@ def generate_embeddings(
     image_model: str = DEFAULT_IMAGE_MODEL,
     text_model: str = DEFAULT_TEXT_MODEL,
     device: str = "auto",
+    image_dtype: str = "float32",
     text_batch_size: int = 16,
     limit: int | None = None,
     retry_failed: bool = False,
@@ -87,6 +88,8 @@ def generate_embeddings(
 
     if not set(kinds).issubset(KINDS) or text_batch_size <= 0:
         raise ValueError("Invalid embedding kinds or text batch size")
+    if image_dtype not in {"float32", "float16"}:
+        raise ValueError("image_dtype must be float32 or float16")
     apply_migrations(connection)
     from pgvector.psycopg import register_vector
 
@@ -139,8 +142,8 @@ def generate_embeddings(
                     _success(connection, row["id"], kind, model_name, vector)
                     result["embedded"] += 1
         else:
-            from PIL import Image
             from ..embedding.dinov2_embedder import DinoV2Embedder
+            from ..preprocessing.image_preprocessor import ImagePreprocessor
             from transformers import AutoConfig
 
             if device == "cuda":
@@ -150,10 +153,12 @@ def generate_embeddings(
             embedder = DinoV2Embedder(
                 model_name, embedding_dimension=dimension,
                 device=None if device == "auto" else device,
+                dtype=image_dtype,
             )
             if device != "auto" and embedder.device != device:
                 raise RuntimeError(f"Image embedder selected {embedder.device}, requested {device}")
             cache: dict[Path, list[float]] = {}
+            preprocessor = ImagePreprocessor()
             for row in rows:
                 _started(connection, row["id"], kind, model_name)
                 try:
@@ -170,14 +175,19 @@ def generate_embeddings(
                     if not path.is_relative_to(root) or not path.is_file():
                         raise FileNotFoundError(f"Image not found under {root}: {relative}")
                     if path not in cache:
-                        with Image.open(path) as image:
-                            cache[path] = embedder.embed(image.convert("RGB"))
+                        with preprocessor.open_rgb(path) as image:
+                            cache[path] = embedder.embed(image)
                     _success(connection, row["id"], kind, model_name, cache[path])
                     result["embedded"] += 1
                 except Exception as exc:
                     _failure(connection, row["id"], kind, model_name, str(exc))
                     result["errors"] += 1
         results[kind] = dict(result)
+        # Do not keep one model alive while loading the next embedding kind.
+        del embedder
+        import torch
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     return results
 
 

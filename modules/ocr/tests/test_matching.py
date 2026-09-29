@@ -44,6 +44,45 @@ class FakeRepository:
 
 
 class MatchingTests(unittest.TestCase):
+    def test_evidence_confidence_excludes_prices(self):
+        runtime = FakeOCRRuntime("1298 каберне совиньон")
+        base = runtime.run_ocr_from_bytes
+        def enriched(data, config):
+            result = base(data, config)
+            result.text_blocks = [
+                SimpleNamespace(normalized_text="1298", confidence=1.0),
+                SimpleNamespace(normalized_text="каберне совиньон", confidence=.8),
+            ]
+            return result
+        runtime.run_ocr_from_bytes = enriched
+        result = match_image_from_bytes(
+            b"image", config=OCRConfig(), ocr_runtime=runtime,
+            text_embedder=FakeTextEmbedder(), repository=FakeRepository(), include_evidence=True,
+        )
+        self.assertAlmostEqual(result["evidence"]["text_confidence"], .8)
+
+    def test_optional_evidence_carries_only_confident_non_foundation_years(self):
+        runtime = FakeOCRRuntime("wine 2023 since 1900")
+        base = runtime.run_ocr_from_bytes
+
+        def enriched(data, config):
+            result = base(data, config)
+            result.candidate_fields = [
+                SimpleNamespace(field_type="year", value="2023", confidence=.95, source_text="2023"),
+                SimpleNamespace(field_type="year", value="2022", confidence=.5, source_text="2022"),
+                SimpleNamespace(field_type="year", value="1900", confidence=.99, source_text="since 1900"),
+            ]
+            return result
+
+        runtime.run_ocr_from_bytes = enriched
+        result = match_image_from_bytes(
+            b"image", config=OCRConfig(), ocr_runtime=runtime,
+            text_embedder=FakeTextEmbedder(), repository=FakeRepository(),
+            include_evidence=True,
+        )
+        self.assertEqual(result["evidence"]["years"], [2023])
+        self.assertEqual(result["top_10"], {"42": .9})
+
     def test_full_pipeline_hands_ocr_text_to_embedding_and_comparison(self) -> None:
         ocr = FakeOCRRuntime("красная стрелка 2023", "КРАСНАЯ СТРЕЛКА")
         embedder = FakeTextEmbedder()

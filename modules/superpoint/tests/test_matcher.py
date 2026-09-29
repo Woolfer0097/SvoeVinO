@@ -135,6 +135,45 @@ def test_cuda_request_fails_when_cuda_is_unavailable() -> None:
         )
 
 
+def test_cuda_results_are_synchronized_before_reading_cpu_lists():
+    pending = {"copied": False}
+
+    class CudaTorch(FakeTorch):
+        class cuda:
+            @staticmethod
+            def is_available():
+                return True
+
+            @staticmethod
+            def synchronize(device):
+                assert device == "cuda"
+                pending["copied"] = True
+
+    class AsyncTensor(ListTensor):
+        def tolist(self):
+            assert pending["copied"], "GPU to CPU copy has not finished"
+            return super().tolist()
+
+    matcher = SuperPointLightGlueMatcher(
+        torch_module=CudaTorch(), extractor=object(), matcher=object(),
+        image_to_tensor=MovedImage, device="cuda",
+        match_fn=lambda *args, **kwargs: (
+            {"keypoints": AsyncTensor([[1, 2]])},
+            {"keypoints": AsyncTensor([[3, 4]])},
+            {"matches": AsyncTensor([[0, 0]]), "scores": AsyncTensor([.8])},
+        ),
+    )
+    assert matcher.match(Image.new("RGB", (8, 8)), Image.new("RGB", (8, 8))).num_matches == 1
+
+
+def test_negative_match_indices_are_not_python_list_offsets():
+    with pytest.raises(RuntimeError, match="out-of-range"):
+        prediction_from_features(
+            {"keypoints": [[0, 0]]}, {"keypoints": [[0, 0]]},
+            {"matches": [[-1, 0]], "scores": [.5]},
+        )
+
+
 def test_missing_ml_dependencies_have_an_install_hint(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
