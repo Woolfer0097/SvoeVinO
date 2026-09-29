@@ -18,8 +18,12 @@ image=<JPEG|PNG|WebP, до 10 MiB>
 
 ## Материалы
 
+- [Пояснительная записка для Google Docs](docs/EXPLANATORY_NOTE.md)
 - [Архитектура, стек, развертывание и API](docs/PROJECT_DOCUMENTATION.md)
 - [Чек-лист и ссылки для формы сдачи](docs/SUBMISSION.md)
+- [Презентация](https://docs.google.com/presentation/d/1pzhzqwI5W76UL3ebhlab9h3O8Sioo7neJVBXNWMWcOU/edit?usp=sharing)
+- [Видеодемонстрация](https://drive.google.com/file/d/1wnAhaoVxA8Qz9XYEC32mG-Xsi1XbZ3Kv/view?usp=sharing)
+- [Публичный прототип](https://wine.knittta.ru/) и [Swagger API](https://wine.knittta.ru/docs)
 - [Общий backend](modules/wine_pipeline/README.md)
 - [Frontend](frontend/README.md)
 - [DINOv2 retrieval](modules/dinov2_retrieval/README.md)

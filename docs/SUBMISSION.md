@@ -1,6 +1,6 @@
 # Чек-лист формы сдачи
 
-Замените все значения `ДОБАВИТЬ` и проверьте ссылки в режиме инкогнито.
+Проверьте все ссылки в режиме инкогнито перед отправкой формы.
 
 ## Поля формы
 
@@ -17,11 +17,12 @@
 
 **Дополнительные материалы:**
 
+- [пояснительная записка для переноса в Google Docs](EXPLANATORY_NOTE.md);
 - runtime-архив БД и эталонных фото: [скачать ZIP](https://wine.knittta.ru/downloads/svoevino-runtime-giant-e5-20260929-final.zip);
 - файл: `svoevino-runtime-giant-e5-20260929-final.zip` (352 415 229 байт);
 - SHA-256 архива: `0de7dd968d28955af082ec41770e724110c7ab76d1038be844b37099c3800dbc`;
 - [файл контрольной суммы](https://wine.knittta.ru/downloads/svoevino-runtime-giant-e5-20260929-final.zip.sha256);
-- видеодемонстрация: `ДОБАВИТЬ ПУБЛИЧНУЮ ССЫЛКУ`;
+- видеодемонстрация: `https://drive.google.com/file/d/1wnAhaoVxA8Qz9XYEC32mG-Xsi1XbZ3Kv/view?usp=sharing`;
 - схема архитектуры:
 
 ![схема](image_2026-09-29_00-37-47.png)
