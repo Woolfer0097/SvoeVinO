@@ -1,285 +1,597 @@
-# Wine OCR
+# OCR — распознавание текста и поиск вина по этикетке
 
-The module includes lightweight tests and manual-review tools. Photos,
-annotations, and generated model responses are local inputs and are not needed
-in Git for installation or unit tests.
+Модуль извлекает текст из фотографии бутылки или этикетки с помощью PaddleOCR,
+преобразует его в эмбеддинг multilingual E5 и находит в PostgreSQL до десяти
+наиболее похожих вин. Для ручной проверки доступны распознанный текст,
+структурированный JSON и TXT-отчёт.
 
-OCR service for Russian wine bottle or label photos. The core recognizer extracts
-text signals; an optional matching path searches catalog text embeddings.
+В готовом проекте OCR работает как текстовая ветвь общего backend
+[`wine_pipeline`](../wine_pipeline/README.md). Backend объединяет её с результатами
+DINOv2 и SuperPoint/LightGlue, учитывает цвет и год и возвращает итоговый `slug`.
+Сам OCR возвращает ID строк каталога и оценки текстового сходства.
 
-The core recognizer remains catalog-agnostic. It returns raw OCR text,
-normalized text, text blocks with confidence and coordinates, and candidate
-fields such as a provisional wine name, years, percentages, and volumes. The
-separate `/match` path uses the existing PostgreSQL catalog to return candidate
-IDs without changing the recognizer's output. It currently ranks text matches
-alone; combining them with visual retrieval is future integration work.
+Улучшение изображения выполняет отдельный модуль
+[`wine_label_preprocessing`](../wine_label_preprocessing/README.md).
+Модули взаимодействуют по HTTP и не импортируют Python-код друг друга.
+OCR также можно запустить отдельно: для `/ocr` и `/ocr/txt` база не нужна,
+для `/match` и `/match/text` нужен каталог с текстовыми эмбеддингами.
 
-## Scope
-
-Owned area:
+## Как устроена обработка
 
 ```text
-modules/ocr/**
+Фото → PaddleOCR → нормализация текста и выделение полей
+                         ├── /ocr: JSON и TXT внутри ответа
+                         ├── /ocr/txt: TXT-отчёт
+                         └── text_processing → E5-вектор
+                                                   ↓
+Текст → /match/text → E5-вектор → embedding_comparison → PostgreSQL
+                                                   ↓
+                                             {"top_10": {id: score}}
 ```
 
-The standalone `/ocr` and `/ocr/txt` endpoints run without other project
-modules. `/match` additionally needs the catalog in PostgreSQL, populated with
-text embeddings. No other Python package in this repository is imported by
-the OCR module.
+1. OCR декодирует изображение, учитывает EXIF-ориентацию и переводит его в RGB.
+   По умолчанию распознаются два варианта: полное изображение (`full`) и
+   центральный фрагмент (`central_crop`) размером 72% ширины и высоты.
+2. Текстовые блоки упорядочиваются, очевидные дубликаты удаляются. Нормализация
+   приводит Unicode к NFKC, регистр — к нижнему и объединяет пробельные символы.
+   Дополнительно выделяются предполагаемое название, годы, проценты и объёмы.
+3. При `/match` подмодуль `text_processing` получает весь `normalized_text`.
+   Только для поискового запроса к нему добавляется ещё одно упоминание
+   `candidate_name` и применяется ограниченное исправление похожих символов
+   кириллицы/латиницы, например `3akat` → `закат`. JSON и TXT распознавания
+   от этих преобразований не меняются.
+4. E5 строит один вектор всего запроса, а не отдельного кандидата для каждого
+   слова. По умолчанию это `intfloat/multilingual-e5-base`, размерность — 768.
+   Используются префикс `query: `, усреднение векторов токенов и L2-нормализация.
+   Текст длиннее 512 токенов делится по границам слов; векторы частей
+   объединяются с весами по числу слов и снова нормализуются.
+5. `embedding_comparison` выполняет поиск по косинусному расстоянию в
+   `wines.description_text_embedding`. Из строк каждого `slug` выбирается
+   ближайшая, затем возвращается до десяти разных вин.
 
-## Runtime
+`/match/text` начинает сразу с E5: принимает готовый текст, убирает пробелы
+по краям и выполняет тот же поиск. Распознавание изображения, выбор
+`candidate_name` и исправление OCR-символов в этом пути не выполняются.
 
-- Python 3.12
-- Docker-first deployment
-- Local inference only
-- PaddleOCR baseline backend
-- REST entrypoint for image uploads
+### Роль в общем запросе
 
-The Dockerfile pins PaddleOCR 3.7.0 and PaddlePaddle 3.2.2 and installs a
-CPU-only PyTorch 2.8.0 wheel for text embeddings. Setting
-`TEXT_EMBEDDING_DEVICE=cuda` alone does not make this Docker image GPU-capable.
+Общий backend сначала вызывает предобработку, затем параллельно запускает
+визуальную и текстовую ветви. В OCR он отправляет подготовленный PNG запросом
+`POST http://ocr:8000/match?include_evidence=true`, multipart-поле **file**.
+Текущий профиль предобработки ограничивает длинную сторону OCR-изображения
+1920 пикселями без увеличения маленьких снимков и применяет мягкую коррекцию
+яркости и CLAHE. Это настройки внешнего сервиса.
 
-Importing `wine_ocr` or `wine_ocr.engine.paddle` does not create a PaddleOCR
-client, download weights, contact the network, or run inference. PaddleOCR is
-initialized lazily only when `recognize()` is called. The REST service keeps a
-single cached OCR engine for the active backend settings, so model initialization
-happens on the first OCR request and later requests reuse the loaded backend.
-First use may download PaddleOCR or E5 weights; inference itself is local.
+Полученные OCR-ID backend переводит в `slug` через таблицу `wines`.
+Он оценивает содержательность текста и использует вес OCR `0.7` при достаточном
+тексте или `0.3` при слабом. Кандидаты OCR, пропущенные DINOv2, могут дополнительно
+проверяться SuperPoint при наличии опубликованных эталонов. Объединение оценок,
+проверка года, выбор итогового вина и обработка отказов находятся в
+`wine_pipeline`. Подробные правила приведены в его README.
 
-## REST API
+При уточнении пользователем названия и других сведений в форме обратной связи
+backend вызывает `/match/text`. Проверку однозначности ответа, сохранение
+отзыва и добавление подтверждённой фотографии в визуальный индекс выполняет
+backend; OCR только ищет по существующему каталогу.
 
-Start the standalone OCR service from `modules/ocr` (the default published port
-is `8000`, unless `.env` sets `OCR_PORT`). The tracked `outputs/.gitkeep`
-keeps the bind-mounted output directory in a fresh checkout:
+## Стек и структура
+
+- Python 3.12 или новее; Docker-образы используют Python 3.12.
+- PaddleOCR `3.7.0`, PaddlePaddle `3.2.2`.
+- FastAPI и Uvicorn для HTTP API.
+- PyTorch `2.8.0` в Docker, Transformers и multilingual E5 для текста.
+- PostgreSQL с расширением pgvector; подключение через psycopg.
+
+```text
+src/wine_ocr/
+├── entrypoints/rest.py           # HTTP API
+├── application/                 # OCR, кэш модели и последовательность /match
+├── engine/                      # адаптер PaddleOCR
+├── preprocessing/               # декодирование, EXIF, центральный фрагмент
+├── postprocessing/              # текстовые блоки, нормализация, поля-кандидаты
+├── text_processing/             # подготовка текста и E5-эмбеддинг
+├── embedding_comparison/        # чтение PostgreSQL и формирование Top-10
+├── reporting/                   # TXT-отчёт и безопасные имена файлов
+├── config.py                    # настройки из окружения
+└── contracts.py                 # структуры результатов
+tests/                           # модульные тесты и инструменты ручных прогонов
+tests/fixtures/manual_review/    # шаблон разметки и папка для своих фотографий
+outputs/                         # локальные результаты; в Git только .gitkeep
+```
+
+## Запуск всего проекта
+
+Полная инструкция по получению данных и восстановлению базы находится в
+[корневом README](../../README.md). Для нового клона нужен указанный там
+runtime-архив с дампом и эталонными фотографиями: запуск пустого PostgreSQL
+не создаёт готовый каталог. Повторно генерировать эмбеддинги восстановленного
+каталога не требуется.
+
+После подготовки данных, `.env` retrieval-модуля и восстановления каталога
+команды выполняются **из корня репозитория**:
 
 ```bash
-docker compose up --build
+docker compose -f modules/dinov2_retrieval/docker-compose.yml up -d postgres
+docker compose -f compose.pipeline.yml up -d --build
+docker compose -f compose.pipeline.yml logs -f ocr backend
 ```
 
-To run `/match` against the catalog, start `postgres` from
-`modules/dinov2_retrieval` first and ensure its `wines` table contains text
-embeddings (see [the retrieval setup](../dinov2_retrieval/README.md); starting
-an empty PostgreSQL instance is insufficient). In this module, copy
-`.env.example` to an untracked `.env`, set a
-real `DATABASE_URL` for the reachable PostgreSQL service (for example,
-`postgresql://USER:PASSWORD@postgres:5432/wine_catalog`) and set
-`OCR_PORT=127.0.0.1:8001`. Then start OCR with the catalog network override:
+Основной профиль использует GPU для DINOv2/SuperPoint и CPU для OCR/E5.
+Frontend доступен на <http://localhost:3000>, Swagger общего backend — на
+<http://localhost:8080/docs>. OCR доступен внутри Docker-сети по
+`http://ocr:8000`; его порт на хост не публикуется.
+
+Для компьютера без GPU используйте вместо основного запуска:
+
+```bash
+docker compose -f compose.pipeline.yml -f compose.pipeline.cpu.yml up -d --build
+```
+
+Для переноса OCR и E5 на GPU сначала соберите базовый CUDA-образ:
+
+```bash
+docker compose -f compose.pipeline.yml -f compose.pipeline.gpu.yml build ocr-cuda-base
+docker compose -f compose.pipeline.yml -f compose.pipeline.gpu.yml up -d --build
+```
+
+Этот вариант использует `Dockerfile.gpu`, PyTorch с CUDA 12.6 и
+`paddlepaddle-gpu==3.2.2`, заменяя CPU-версию PaddlePaddle. Требуются доступный
+в Docker NVIDIA GPU, совместимый драйвер и память для всех моделей.
+Одной переменной `TEXT_EMBEDDING_DEVICE=cuda` в обычном CPU-образе недостаточно.
+
+Облегчённый `compose.pipeline.light.yml` меняет только SuperPoint/LightGlue;
+настройки OCR остаются прежними. Развёртывание общего проекта на CPU-сервере
+с HTTPS описано в [deploy/README.md](../../deploy/README.md).
+
+Проверка полного пути использует endpoint backend и поле **image**:
+
+```bash
+curl -i -F "image=@label.jpg" http://127.0.0.1:8080/v1/eval/predict
+```
+
+Ответ — `{"slug":"..."}`. Для асинхронного режима и полной диагностики
+используйте `?wait=false` и `GET /image/status?job_id=...`, как описано в
+[README общего backend](../wine_pipeline/README.md).
+
+## Отдельный запуск OCR
+
+Все команды этого и следующих разделов выполняются **из `modules/ocr`**,
+если явно не указано другое. В Windows PowerShell для HTTP-примеров используйте
+`curl.exe`, если `curl` является псевдонимом PowerShell.
+
+### Только распознавание, без базы
+
+Для новой установки из корня репозитория создайте локальный файл настроек:
+
+```bash
+cd modules/ocr
+cp .env.example .env
+```
+
+Если `.env` уже существует, отредактируйте его, сохранив нужные локальные
+настройки. Добавьте строку:
+
+```dotenv
+OCR_PORT=127.0.0.1:8002
+```
+
+Далее:
+
+```bash
+docker compose up -d --build
+curl http://127.0.0.1:8002/health
+```
+
+Здесь выбран порт `8002`, чтобы не пересекаться с отдельными DINOv2 (`8000`)
+и SuperPoint (`8001`). Если `OCR_PORT` не задан, модульный Compose публикует
+порт `8000`. Swagger OCR: <http://127.0.0.1:8002/docs>, схема:
+<http://127.0.0.1:8002/openapi.json>.
+
+### OCR и поиск в каталоге
+
+Сначала запустите PostgreSQL и подготовьте каталог по корневой инструкции.
+В OCR `.env` укажите `DATABASE_URL` с реквизитами этой базы. Для стандартного
+локального PostgreSQL из retrieval Compose это:
+
+```dotenv
+DATABASE_URL=postgresql://dinov2:dinov2@postgres:5432/dinov2
+OCR_PORT=127.0.0.1:8002
+```
+
+При других реквизитах замените пользователя, пароль и имя базы. Затем:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.catalog.yml up -d --build
 ```
 
-`docker-compose.catalog.yml` joins the retrieval Compose network
-`dinov2_retrieval_default`. If the retrieval project uses a different Compose
-project name, update the external network name in that file. With this setup,
-OCR is available at `http://localhost:8001`; the ordinary standalone command
-above still works without the catalog network. The catalog override also keeps
-downloaded Hugging Face/E5 model files in a Docker volume across OCR container
-recreation. The examples below use port `8001` for the integrated setup;
-replace it with `8000` for the standalone default. A successful `/health`
-response only checks the API process, not model readiness or database access.
+Дополнительный Compose-файл подключает сервис `wine-ocr` к существующей сети
+`dinov2_retrieval_default` и сохраняет кэш E5 в Docker volume. Если PostgreSQL
+запущен с другим именем Compose-проекта, имя внешней сети нужно согласовать.
+Адрес `postgres:5432` используется внутри Docker-сети; `127.0.0.1:5433` —
+стандартный адрес этой базы с хоста. `127.0.0.1` внутри контейнера указывает
+на сам контейнер.
 
-JSON response with structured OCR result and a TXT report:
+Отдельный сервис называется `wine-ocr`, в корневом Compose — `ocr`.
+Файл `modules/ocr/.env` обслуживает отдельный запуск; корневой Compose задаёт
+свои настройки и не подхватывает этот файл автоматически.
+
+## HTTP API модуля
+
+Примеры ниже используют отдельный OCR на порту `8002` и свой файл `label.jpg`.
+В корневом запуске эти endpoints доступны только внутри Docker-сети.
+
+| Метод и путь | Вход | Результат |
+| --- | --- | --- |
+| `GET /health` | — | `{"status":"ok"}`: процесс API отвечает |
+| `POST /ocr` | multipart `file` | JSON с `result`, `txt_report`, `txt_file` |
+| `POST /ocr/txt` | multipart `file` | TXT для скачивания |
+| `POST /match` | multipart `file` | `{"top_10": {id: score}}` |
+| `POST /match?include_evidence=true` | multipart `file` | Top-10 и сведения `evidence` для backend |
+| `POST /match/text` | JSON `{"text":"..."}` | Top-10 по готовому тексту, без OCR |
+
+`/health` не загружает модели и не проверяет доступность PostgreSQL.
+Успешный ответ этого endpoint не означает готовность распознавания или поиска.
+
+### JSON и TXT распознанного текста
 
 ```bash
-curl -F "file=@label.jpg" http://localhost:8001/ocr
+curl -F "file=@label.jpg" http://127.0.0.1:8002/ocr
+curl -F "file=@label.jpg" http://127.0.0.1:8002/ocr/txt -o ocr_report.txt
 ```
 
-By default, `/ocr` returns the TXT report inline in the JSON response and does
-not persist it on disk. Set `OCR_REPORT_RETENTION=true` to also save reports
-under `OCR_OUTPUT_DIR` and return the saved path in `txt_file`.
+Поля объекта `result`:
 
-Download a plain TXT report:
+| Поле | Содержание |
+| --- | --- |
+| `raw_text` | Текст сохранённых блоков до нормализации, разделённый переводами строк |
+| `normalized_text` | Объединённый нормализованный текст всех сохранённых блоков |
+| `text_blocks` | Текст, нормализованный текст, `confidence`, координаты `bbox` и `source_variant` каждого блока |
+| `tokens` | Слова и числа из нормализованного текста |
+| `candidate_name` | Предполагаемое название вина или `null` |
+| `candidate_fields` | Кандидаты `name`, `year`, `percentage`, `volume` с источником, нормализованным значением и уверенностью OCR |
+| `engine` | Использованный OCR-движок, язык и настройка устройства |
+| `processing_time_ms` | Время обработки OCR; не полная задержка HTTP/E5/БД |
+| `variant_times_ms` | Время проходов `full` и `central_crop`; первый проход холодного запроса включает загрузку PaddleOCR |
+| `warnings` | Предупреждения, например отсутствие распознанных блоков |
+
+`candidate_name` выбирается эвристикой среди похожих на название надписей
+вблизи горизонтального центра изображения, с предпочтением центрального
+прохода. Учитываются размер, положение и уверенность OCR; подходящие соседние
+фрагменты могут объединяться. Та же фраза записывается в `candidate_fields`
+с `field_type="name"`. Это предположение по тексту этикетки, а не найденная
+карточка каталога; оно может быть ошибочным.
+
+TXT содержит разделы `Raw lines` (распознанные строки), `Normalized text`
+(нормализованный текст), `Candidate name` (название), `Candidate years` (годы),
+`Candidate percentages` (проценты) и `Candidate volumes` (объёмы).
+Заголовки отчёта и ключи JSON сохраняют эти имена.
+
+По умолчанию `txt_report` возвращается прямо в JSON, а `txt_file` равен `null`.
+`OCR_REPORT_RETENTION=true` дополнительно сохраняет TXT запроса `/ocr`
+в `OCR_OUTPUT_DIR`; `txt_file` содержит путь внутри среды сервиса, а не URL.
+В отдельном Compose это `/app/outputs`, связанный с локальной папкой `outputs/`.
+Endpoint `/ocr/txt` не сохраняет отчёт на сервере. Каждый из этих запросов
+запускает распознавание заново; для JSON и TXT одного прохода удобнее скрипт
+ручного прогона ниже, использующий только `/ocr`.
+
+### Поиск по фотографии
 
 ```bash
-curl -F "file=@label.jpg" http://localhost:8001/ocr/txt -o ocr_report.txt
+curl -F "file=@label.jpg" http://127.0.0.1:8002/match
 ```
 
-Find the ten closest catalog rows from the same uploaded photo:
-
-```bash
-curl -F "file=@label.jpg" http://localhost:8001/match
-```
-
-`/match` runs the existing OCR pipeline, converts its complete
-`normalized_text` into a multilingual E5 query vector, and compares that vector
-with `wines.description_text_embedding` in PostgreSQL. For the embedding query
-only, it repeats the likely central `candidate_name` once and repairs words made
-entirely of Cyrillic letters and visually similar Latin OCR characters (for
-example `3akat` → `закат`). The original OCR JSON and TXT stay unchanged.
-It returns only the catalog row IDs and scores:
+Пример структуры ответа с двумя кандидатами:
 
 ```json
 {"top_10": {"123": 0.94, "456": 0.88}}
 ```
 
-The example shows two entries for brevity; the service returns up to ten. JSON
-object keys are strings even though `wines.id` is a numeric PostgreSQL ID. The
-score is `1 - cosine_distance / 2`, constrained to `[0, 1]`. It orders results;
-it is not a calibrated probability. No recognized text or TXT report is included
-in this endpoint. An image with no recognized text returns `{"top_10": {}}`.
-The existing `/ocr` and `/ocr/txt` endpoints remain available for manual review.
+Ключи — строковое представление числовых `wines.id`. Это ID ближайшей строки
+каждого `slug`, не обязательно минимальный ID этого вина. Повторы `slug`
+не занимают несколько мест в Top-10. Оценка рассчитывается как
+`score = 1 - cosine_distance / 2` и ограничивается диапазоном `[0, 1]`.
+Чем выше значение, тем ближе текстовый эмбеддинг. Это **не вероятность**
+правильного ответа. Результаты выдаются по убыванию оценки, при равенстве —
+по возрастанию ID; клиенту надёжнее явно сортировать их по `score`.
 
-The new stages are separate packages under `wine_ocr`: `text_processing` handles
-only text-to-vector conversion, while `embedding_comparison` performs a read-only
-PostgreSQL search and creates the final response. `text_processing` uses
-`intfloat/multilingual-e5-base` by default, with the same mean pooling and L2
-normalization as the catalog generator. Catalog entries use `passage: ` and OCR
-queries use `query: `. Text longer than the model's 512-token input is split at
-word boundaries; all chunks contribute to one normalized query vector. The
-matching code does not import the DINOv2 package or compare text vectors with
-image vectors.
+Возвращается максимум десять кандидатов. Если подходящих по модели и размерности
+вин меньше, список короче. При отсутствии распознанного текста ответ —
+`{"top_10": {}}`, без вызова E5 и БД. Отдельного порога принятия совпадения
+в этом endpoint нет: даже высокий Top-1 требует проверки в общем pipeline.
 
-`/match` requires the `matching` dependency extra, which the OCR Dockerfile
-installs. Configure `DATABASE_URL` for a PostgreSQL database with pgvector and
-populated `wines.description_text_embedding` rows. The query selects only rows
-whose `description_text_embedding_model` equals the query model and whose vector
-dimension matches. It never creates tables or changes catalog records. Set
-`TEXT_EMBEDDING_MODEL_NAME` only when the catalog has vectors from that exact
-model; `TEXT_EMBEDDING_DEVICE` accepts `auto`, `cpu`, or `cuda`. Loading the E5
-model and connecting to PostgreSQL happen on the first matching request that
-produces non-empty OCR text, not during package import or `/health`. If the model
-or database is unavailable, `/match` returns HTTP 503. An unreadable image
-returns HTTP 400.
+Для сведений, используемых backend:
 
-The OCR and retrieval Compose projects are separate. Before an integrated run,
-give the OCR container a reachable `DATABASE_URL` and, if both HTTP services
-run on one host, select different published ports (for example `OCR_PORT=8001`).
-The existing retrieval service's `reference_images.wine_id` is a string and is
-not automatically linked to the numeric `wines.id` returned here. Combining
-visual and text rankings therefore needs an explicit ID mapping later.
+```bash
+curl -F "file=@label.jpg" "http://127.0.0.1:8002/match?include_evidence=true"
+```
 
-The TXT report contains sections:
+Иллюстративный ответ:
 
-- raw lines
-- normalized text
-- candidate name
-- candidate years
-- candidate percentages
-- candidate volumes
+```json
+{
+  "top_10": {"123": 0.94, "456": 0.88},
+  "evidence": {
+    "text": "пример названия 2021 сухое",
+    "candidate_name": "Пример названия",
+    "years": [2021],
+    "text_confidence": 0.92
+  }
+}
+```
 
-`candidate_name` is selected heuristically from name-like text near the center
-of the image, preferring the central-crop OCR pass. The same phrase appears as
-`field_type="name"` in `candidate_fields` with its OCR confidence and source
-variant. It may be `null` when no plausible phrase is found; it is not a
-catalog match or a calibrated probability of the wine name. The heuristic can
-join two similarly sized centered lines, including `ESTATE` when it is part of
-a name, and can retain a visually dominant title despite moderately low OCR
-confidence. It does not rewrite the raw recognized text.
+`text_confidence` — средняя уверенность распознавания блоков, взвешенная
+по числу букв; учитываются блоки минимум с тремя буквами. Это не оценка E5.
+Если подходящих блоков нет, значение равно `null`. В `years` попадают
+уникальные годы 1900–2099 с уверенностью OCR не ниже `0.8`; источники с
+маркерами основания винодельни (`основан`, `основания`, `since`, `founded`,
+`established`) отбрасываются. Несколько лет сохраняются как неоднозначные
+сведения. При полностью пустом OCR-тексте ранний ответ остаётся
+`{"top_10": {}}`, без `evidence`.
 
-`result.variant_times_ms` records the elapsed time of each OCR pass (`full` and
-`central_crop`). The first pass also includes lazy model initialization on a
-cold request. The service continues to run both passes by default because the
-central pass recovers useful label text on the current review photos.
+### Поиск по готовому тексту
 
-## PaddleOCR experiments
+В Swagger OCR выберите `POST /match/text` и отправьте, например:
 
-The service exposes the installed PaddleOCR 3.x pipeline options as environment
-variables. The evaluated default disables whole-image document orientation,
-keeps document unwarping and text-line orientation enabled, uses PaddleOCR's
-default detector and recognizer, and recognizes both image variants. This
-profile was selected after local comparison on annotated photos. The
-previously used all-enabled profile remains available by setting
-`OCR_USE_DOC_ORIENTATION_CLASSIFY=true`.
-PaddleOCR 3.7.0 and PaddlePaddle 3.2.2 are pinned for reproducible comparisons;
-the OCR model and weights can still be changed in a later experiment.
+```json
+{"text":"Пример названия 2021, винодельня, регион"}
+```
 
-| Variable | Meaning |
+Можно сохранить такой JSON в локальный UTF-8-файл `outputs/text_query.json`
+и выполнить:
+
+```bash
+curl -H "Content-Type: application/json" --data-binary "@outputs/text_query.json" http://127.0.0.1:8002/match/text
+```
+
+Поле `text` принимает от 1 до 2400 символов. Ответ имеет ту же структуру
+`top_10`, без `evidence` и TXT. Строка только из пробелов после очистки
+считается пустым текстом и в текущей реализации приводит к HTTP 503.
+
+### Ошибки и ограничения входа
+
+| Код | Когда возвращается OCR API |
 | --- | --- |
-| `OCR_USE_DOC_ORIENTATION_CLASSIFY` | Enable whole-image orientation classifier |
-| `OCR_USE_DOC_UNWARPING` | Enable PaddleOCR document unwarping |
-| `OCR_USE_TEXTLINE_ORIENTATION` | Enable text-line orientation classifier |
-| `OCR_TEXT_DET_LIMIT_SIDE_LEN` | Optional positive detection-side limit |
-| `OCR_TEXT_DET_THRESH` | Optional pixel threshold for detecting weak text |
-| `OCR_TEXT_DET_BOX_THRESH` | Optional box confidence threshold for detecting weak text |
-| `OCR_TEXT_DETECTION_MODEL_NAME` | Optional PaddleOCR detection model name |
-| `OCR_TEXT_RECOGNITION_MODEL_NAME` | Optional PaddleOCR recognition model name |
+| `400` | Пустое, недекодируемое или превышающее лимит изображение |
+| `422` | Неверная структура запроса: нет `file`, нет `text`, нарушена длина `text` |
+| `500` | Некорректная конфигурация OCR или внутренняя ошибка, включая сохранение отчёта |
+| `502` | Ошибка выполнения PaddleOCR |
+| `503` | Не удалось загрузить/выполнить E5 или обратиться к каталогу |
 
-These are OCR pipeline settings, not image enhancement. Change one setting at a
-time and compare against the same labeled photos before adopting it as a
-default. A faster profile is not promoted if it loses important text.
+Прямой OCR API по умолчанию принимает до 15 MiB (`15728640` байт) и
+декодирует изображение через Pillow. Общий backend имеет отдельный контракт:
+JPEG/PNG/WebP, до 10 MiB и 25 млн пикселей. Лимиты и коды ошибок общего API
+не следует переносить на прямой OCR endpoint.
 
-Docker Compose uses the official BOS model source for first-time PaddleOCR
-downloads (`PADDLE_PDX_MODEL_SOURCE=BOS`). Inference remains local. PaddleOCR
-weights are cached inside the container under `/home/app/.paddlex`, so a newly
-created container may need to download them again. `docker stop` preserves the
-container and that cache; `docker compose down` removes the container. The E5
-cache is persisted separately by `docker-compose.catalog.yml`.
+## Требования к каталогу
 
-## Manual review with your own photos
+OCR читает таблицу `wines` в PostgreSQL с pgvector:
 
-The tracked `tests/fixtures/manual_review/photos/README.txt` keeps an empty
-input directory in a fresh checkout. Put your JPEG, PNG, WebP, BMP, or TIFF
-photos there, or pass another directory as the first argument to a run tool.
-The run tools sort filenames case-insensitively, copy images into a new
-`outputs/testN` directory as `image1`, `image2`, and so on, and record the
-original names in `manifest.json`. The marker TXT is ignored by the tools;
-photos placed in this input directory are ignored by Git.
+| Колонка | Требование |
+| --- | --- |
+| `id` | Числовой идентификатор строки |
+| `slug` | Непустой идентификатор вина; по нему исключаются дубликаты |
+| `description_text_embedding` | Непустой текстовый вектор той же размерности, что у запроса |
+| `description_text_embedding_model` | Точное совпадение с `TEXT_EMBEDDING_MODEL_NAME` |
 
-Start the OCR service and, from `modules/ocr`, run:
+Каталожные векторы создаются в retrieval-модуле из названия, категории, цвета,
+региона, сорта винограда, описания и винодельни с префиксом `passage: `.
+Алгоритм усреднения и нормализации согласован с OCR-запросами.
+Импорт описан в [WINE_PIPELINE.md](../dinov2_retrieval/WINE_PIPELINE.md),
+расчёт эмбеддингов — в [EMBEDDINGS.md](../dinov2_retrieval/EMBEDDINGS.md).
+
+OCR не создаёт таблицы, не генерирует каталог и не обновляет его записи.
+На каждый поиск открывается соединение только для чтения. Текстовые векторы
+не сравниваются с DINOv2-векторами изображений. Смена имени E5-модели требует
+каталожных векторов от той же модели; одно совпадение размерности недостаточно.
+
+## Настройки и кэши
+
+### Различия профилей запуска
+
+| Параметр | Отдельный `docker-compose.yml` | Корневой `compose.pipeline.yml` | Корневой с GPU override |
+| --- | --- | --- | --- |
+| `OCR_DEVICE` | `cpu` | `cpu` | `gpu:0` |
+| `TEXT_EMBEDDING_DEVICE` | `auto` (CPU в обычном образе) | `cpu` | `cuda` |
+| `OCR_USE_DOC_UNWARPING` | `true` | `false` | `false` |
+| `OCR_TEXT_DET_LIMIT_SIDE_LEN` | Не задан, выбор PaddleOCR | `960` | `960` |
+| `OCR_TEXT_DET_LIMIT_TYPE` | Не передаётся, выбор PaddleOCR | `max` | `max` |
+
+Корневой профиль отключает выпрямление документов PaddleOCR и ограничивает
+вход детектора по длинной стороне для снижения расхода памяти.
+Это отдельное ограничение детектора, не размер изображения, выдаваемого
+предобработкой. GPU override меняет устройство и образ, но сохраняет эти
+настройки. CPU override оставляет OCR/E5 на CPU.
+
+Поэтому результаты отдельного запуска и общего pipeline могут отличаться:
+различаются как входное изображение, так и параметры PaddleOCR.
+Дополнительная цилиндрическая развёртка этикетки и автоматическое выделение
+бутылки самим OCR не выполняются.
+
+### Остальные параметры
+
+| Переменная | Значение по умолчанию / назначение |
+| --- | --- |
+| `OCR_ENGINE` | `paddleocr`; реализован один OCR-движок |
+| `OCR_PADDLE_LANG` | `ru`; передаётся в PaddleOCR |
+| `OCR_EXPECTED_LANGUAGES` | `ru,en`; информационная настройка, сама не переключает модели и не фильтрует текст |
+| `OCR_USE_DOC_ORIENTATION_CLASSIFY` | `false`; классификатор ориентации всего документа |
+| `OCR_USE_TEXTLINE_ORIENTATION` | `true`; классификатор ориентации строк |
+| `OCR_ENABLE_CENTRAL_CROP` | `true`; дополнительный проход по центру |
+| `OCR_CENTRAL_CROP_FRACTION` | `0.72`; доля ширины и высоты центрального фрагмента |
+| `OCR_TEXT_DET_THRESH` | Не задан; необязательный порог детектора текста |
+| `OCR_TEXT_DET_BOX_THRESH` | Не задан; необязательный порог текстовых областей |
+| `OCR_TEXT_DETECTION_MODEL_NAME` | Не задан; модель детекции выбирает PaddleOCR |
+| `OCR_TEXT_RECOGNITION_MODEL_NAME` | Не задан; модель распознавания выбирает PaddleOCR |
+| `OCR_MAX_UPLOAD_SIZE_BYTES` | `15728640`; лимит прямой загрузки в OCR |
+| `OCR_REPORT_RETENTION` | `false`; сохранение TXT запросов `/ocr` на сервере |
+| `OCR_OUTPUT_DIR` | `outputs` в Python, `/app/outputs` в Docker |
+| `TEXT_EMBEDDING_MODEL_NAME` | `intfloat/multilingual-e5-base` |
+| `TEXT_EMBEDDING_DEVICE` | `auto`, `cpu` или `cuda` |
+| `DATABASE_URL` | Строка подключения; нужна только для поиска по каталогу |
+| `PADDLE_PDX_MODEL_SOURCE` | `BOS` в Compose; источник первоначальной загрузки моделей PaddleOCR |
+| `OCR_PORT` | `8000` в отдельном Compose; управляет публикацией порта, не Python-кодом |
+
+В самом `OCRConfig` значение `OCR_DEVICE` по умолчанию — `auto`; CPU задаётся
+Docker-образом и отдельным Compose. Модель и параметры должны быть явно
+зафиксированы при сравнении прогонов.
+
+Переменная `OCR_TEXT_DET_LIMIT_TYPE` поддерживается Python-кодом (`min` или
+`max`), но отдельный `docker-compose.yml` не передаёт её из `.env`.
+Для её изменения в отдельном контейнере нужен дополнительный Compose-файл
+с `services.wine-ocr.environment.OCR_TEXT_DET_LIMIT_TYPE`; простого добавления
+строки в `.env` недостаточно. В корневом Compose она уже задана явно.
+
+### Загрузка моделей и хранение
+
+PaddleOCR и E5 загружаются лениво, при первом соответствующем запросе,
+и переиспользуются в процессе сервиса. Импорт пакета и `/health` не скачивают
+веса. Первый запрос может потребовать интернет для загрузки весов; само
+распознавание и вычисление эмбеддингов локальные. Поиск обращается к настроенному
+PostgreSQL. Перед замером времени нужен прогрев реальным запросом.
+
+| Запуск | Кэш PaddleOCR | Кэш E5 |
+| --- | --- | --- |
+| Отдельный OCR | Внутри контейнера | Внутри контейнера |
+| Отдельный с `docker-compose.catalog.yml` | Внутри контейнера | Volume `ocr_hf_cache` |
+| Корневой Compose | Volumes `paddle_cache` и `paddle_legacy_cache` | Общая папка `modules/dinov2_retrieval/model-cache` |
+
+Paddle-кэши расположены в `/home/app/.paddlex` и `/home/app/.paddleocr`.
+В конфигурациях с постоянным E5-кэшем `HF_HOME` указывает на
+`/home/app/.cache/huggingface`. `docker compose stop` сохраняет контейнер;
+его удаление или пересоздание теряет кэш, который не вынесен в volume.
+Удаление volumes через `down -v` удаляет и сохранённые в них данные.
+
+## Проверка на своих фотографиях
+
+### Прогон OCR с JSON и TXT
+
+Положите свои JPEG, PNG, WebP, BMP или TIFF в
+`tests/fixtures/manual_review/photos/`. Файл `README.txt` сохраняет эту папку
+в чистом клоне и пропускается скриптами. Можно указать другую папку первым
+аргументом; изображения берутся только из неё, без рекурсивного обхода.
+
+После отдельного запуска OCR выполните на хосте:
 
 ```bash
-python tests/run_manual_review.py --url http://127.0.0.1:8001/ocr
+python tests/run_manual_review.py --url http://127.0.0.1:8002/ocr
 ```
 
-Use port `8000` if running the standalone default. The command creates
-`imageN_output.json` and `imageN_output.txt` for each photo. `outputs/testN`
-is local and Git-ignored. The user can inspect these files without an
-annotation file.
+Скрипт отправляет HTTP-запросы средствами Python `urllib`; `curl` для него
+не нужен. Он сортирует имена файлов без учёта регистра, копирует фото
+в новую папку `outputs/testN` как `image1.jpg`, `image2.png` и т. д. и сохраняет
+соответствие исходным именам в `manifest.json`. Оригиналы не переименовываются.
+Каждому фото соответствуют `imageN_output.json` и `imageN_output.txt`.
+Оба файла получаются из одного ответа `/ocr`, независимо от
+`OCR_REPORT_RETENTION` на сервере.
 
-To evaluate against known text, copy
-`tests/fixtures/manual_review/correct_text.example.txt` to
-`tests/fixtures/manual_review/correct_text.txt` and fill in `name`, optional
-`years`, and `other` for **every** `imageN` in the manifest. The real
-annotation file is Git-ignored. Then run:
+Таймаут одного запроса по умолчанию — 600 секунд (`--timeout`). Новый запуск
+создаёт следующий номер папки. Для продолжения прерванного прогона:
 
 ```bash
-python tests/evaluate_manual_review.py tests/fixtures/manual_review/correct_text.txt outputs/testN --label chosen-profile
-python tests/diagnose_manual_review.py outputs/testN
+python tests/run_manual_review.py --url http://127.0.0.1:8002/ocr --resume outputs/test1
 ```
 
-The evaluator writes `outputs/testN/evaluation.json`, and the diagnostic tool
-writes `diagnostics.json`. They compare selected phrases strictly after Unicode
-normalization; their counts are not a complete OCR accuracy measure. These
-commands require an OCR run with `imageN_output.json` files; they cannot
-evaluate a `/match`-only run.
+Замените `test1` на свой каталог. При `--resume` уже сохранённые пары JSON/TXT
+пропускаются; для проверки изменённой модели создавайте новый прогон.
 
-With a populated PostgreSQL catalog, test the matching endpoint separately:
+### Сравнение с ожидаемым текстом
+
+Без разметки JSON и TXT можно проверить вручную. Для автоматического сравнения
+скопируйте шаблон:
 
 ```bash
-python tests/run_match_review.py --url http://127.0.0.1:8001/match --expected-count 10
+cp tests/fixtures/manual_review/correct_text.example.txt tests/fixtures/manual_review/correct_text.txt
 ```
 
-That tool saves `imageN_match_output.json` in a new `outputs/testN` folder and
-checks response structure, numeric IDs, score range, and rank order. It does
-not generate TXT. Omit `--expected-count 10` for a smaller catalog. Both run
-tools accept `--resume outputs/testN` after an interrupted run. Historical
-`outputs/testN` results and local `tests/fixtures/baselines/` are deliberately
-excluded from Git.
-
-No historical output file is required for the API, unit tests, or a new manual
-run. `outputs/.gitkeep` is the only tracked file needed there to preserve the
-bind-mount directory. The tests use small synthetic data, so a clean checkout
-passes unit tests before anyone supplies photos. In Windows PowerShell, use
-`curl.exe` for the direct HTTP examples above if `curl` is an alias.
-
-## Local Checks
-
-The deterministic unit tests do not require PaddleOCR, FastAPI, Pillow, or model
-weights:
+В UTF-8-файле заполните записи для **всех и только тех** `imageN`, которые
+есть в `manifest.json` выбранного прогона. Это специальный текстовый формат,
+не JSON: `name` — ожидаемое название, необязательный `years` — годы через
+запятую, `other` — вспомогательные слова или фразы через запятую.
+Поля `name` и `other` обязательны; `other` можно оставить пустой строкой.
 
 ```bash
+python tests/evaluate_manual_review.py tests/fixtures/manual_review/correct_text.txt outputs/test1 --label my-profile
+python tests/diagnose_manual_review.py outputs/test1
+```
+
+Первый скрипт создаёт `evaluation.json`, второй читает его и создаёт
+`diagnostics.json` с наиболее похожими распознанными фрагментами.
+Оценка использует строгое совпадение после нормализации Unicode, регистра
+и пробелов. Это проверка выбранных фраз, не полная метрика качества OCR.
+Диагностика не открывает фотографии и не доказывает причину пропуска текста.
+Оба инструмента требуют результаты `/ocr`; прогон только `/match` не подходит.
+
+### Прогон поиска по каталогу
+
+При запущенном OCR с подключением к заполненной базе:
+
+```bash
+python tests/run_match_review.py --url http://127.0.0.1:8002/match
+```
+
+Создаётся новая папка `outputs/testN` с копиями фото, `manifest.json` и
+`imageN_match_output.json`. Проверяются структура ответа, числовые ID,
+диапазон и порядок оценок; TXT не создаётся. `--expected-count 10` дополнительно
+требует десять кандидатов для каждого фото: используйте его только если
+ожидаете читаемый текст на всех снимках и минимум десять подходящих вин в БД.
+Скрипт также поддерживает `--resume outputs/testN`.
+
+Используйте обычный `/match` без `include_evidence=true`: проверка структуры
+в этом скрипте ожидает только `top_10`. Он проверяет контракт ответа,
+но не определяет, найдено ли правильное вино. Проверка всего проекта
+выполняется отдельно через публичный backend и инструменты `wine_pipeline`.
+
+## Модульные тесты без Docker и моделей
+
+Тесты подменяют OCR, E5 и репозиторий каталога. Они не требуют PostgreSQL,
+GPU, весов моделей или личных фотографий. Для текущих REST-тестов нужен
+Pydantic 2; установка всего ML-стека не обязательна.
+
+Из `modules/ocr` создайте виртуальное окружение Python 3.12+:
+
+```bash
+python -m venv .venv
+```
+
+Активация в Linux/macOS/WSL:
+
+```bash
+source .venv/bin/activate
+```
+
+Активация в Windows PowerShell:
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+Установка минимальной зависимости и запуск:
+
+```bash
+python -m pip install "pydantic>=2.0,<3.0"
 python -m unittest discover -s tests
-python -m compileall src tests
 ```
 
-These checks are functional tests for code paths that do not perform OCR
-inference. They are not an OCR quality benchmark.
-# Common pipeline / GPU
+Это проверки кода и контрактов с подменами, не проверка работы настоящих
+PaddleOCR/E5 или SQL на живой базе. Полноценный прогон требует запущенного
+сервиса, моделей и, для поиска, подготовленного каталога.
 
-Root `compose.pipeline.yml` runs DINO/SuperPoint on GPU and OCR/E5 on CPU
-for a 4 GiB workstation. `compose.pipeline.gpu.yml` additionally moves
-PaddleOCR/E5 to GPU using `Dockerfile.gpu`; build its CUDA base first
-as described in `modules/wine_pipeline/README.md`.
-Text search returns ten distinct slugs even when the source export contains
-multiple rows for one wine. The orchestrator maps returned row IDs to slugs.
+## Локальные данные и ограничения
+
+В Git находятся код, конфигурационные примеры, тестовые скрипты,
+`outputs/.gitkeep`, шаблон `correct_text.example.txt` и маркер папки фотографий.
+Реальная разметка `correct_text.txt`, фотографии в стандартной папке,
+`tests/fixtures/baselines/` и содержимое `outputs/` исключены правилами Git.
+Локальные `.env`, дампы и кэши также не предназначены для публикации.
+
+Исторические ответы модели не нужны для запуска API, модульных тестов или
+нового прогона. По умолчанию OCR API не сохраняет загруженные фотографии
+и отчёты на диск; скрипты ручной проверки специально сохраняют копии и ответы
+локально. Сохранение пользовательских фото по добровольной обратной связи
+относится к общему backend и описано в его README.
+
+Качество зависит от читаемости этикетки и наполнения каталога. `candidate_name`,
+годы и оценки OCR остаются эвристическими сигналами; близость E5 не доказывает
+совпадение вина. Для сравнения качества и времени используйте одинаковые
+размеченные фотографии, одинаковый профиль предобработки и учитывайте
+холодную загрузку моделей отдельно от повторных запросов.
