@@ -47,6 +47,8 @@ services:
       DEVICE: cuda
       TORCH_HOME: /home/app/.cache/torch
       MAX_NUM_KEYPOINTS: "1024"
+      SUPERPOINT_FEATURE_CACHE_MB: "256"
+      SUPERPOINT_FEATURE_CACHE_DIR: /home/app/.cache/torch/superpoint-features
       OMP_NUM_THREADS: "2"
     gpus: all
     volumes:

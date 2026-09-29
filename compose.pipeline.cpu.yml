@@ -1,0 +1,20 @@
+# Local/reviewer CPU profile, without a domain or public reverse proxy.
+# Start PostgreSQL using modules/dinov2_retrieval/docker-compose.yml first.
+services:
+  dinov2:
+    gpus: !reset []
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    environment:
+      DINO_DEVICE: cpu
+      DINO_DTYPE: float32
+      MKL_NUM_THREADS: "2"
+  superpoint:
+    gpus: !reset []
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    environment:
+      DEVICE: cpu
+      MKL_NUM_THREADS: "2"

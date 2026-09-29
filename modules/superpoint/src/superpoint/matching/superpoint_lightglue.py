@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from importlib import import_module
+import hashlib
+import os
+from pathlib import Path
 from typing import Any, Callable
 
 from PIL import Image
@@ -16,6 +19,7 @@ from ..config import (
     get_width_confidence,
 )
 from ..contracts import MatchPrediction
+from .feature_cache import FeatureCache
 
 MODEL_NAME = "superpoint+lightglue"
 ML_INSTALL_HINT = "Install them with: pip install -e '.[ml]'"
@@ -38,6 +42,9 @@ class SuperPointLightGlueMatcher:
         depth_confidence: float | None = None,
         width_confidence: float | None = None,
         filter_threshold: float | None = None,
+        feature_cache_mb: int | None = None,
+        feature_cache_dir: str | Path | None = None,
+        feature_match_fn: Callable | None = None,
     ) -> None:
         if (extractor is None) != (matcher is None):
             raise ValueError("extractor and matcher must be provided together")
@@ -63,6 +70,17 @@ class SuperPointLightGlueMatcher:
             if filter_threshold is not None
             else get_filter_threshold()
         )
+        cache_mb = feature_cache_mb if feature_cache_mb is not None else int(
+            os.getenv("SUPERPOINT_FEATURE_CACHE_MB", "256"))
+        cache_dir = feature_cache_dir if feature_cache_dir is not None else os.getenv(
+            "SUPERPOINT_FEATURE_CACHE_DIR")
+        self.feature_cache = FeatureCache(cache_mb * 1024 * 1024,
+                                          Path(cache_dir) if cache_dir else None)
+        # Preserve injected legacy pair matchers. Production separates extraction
+        # from matching, without changing SuperPoint/LightGlue parameters.
+        self._use_feature_cache = match_fn is None
+        self._feature_match_fn = feature_match_fn or _match_cached_features
+        self._feature_signature: bytes | None = None
 
         if extractor is None:
             torch_module, extractor_cls, matcher_cls, image_to_tensor, match_fn = (
@@ -97,7 +115,8 @@ class SuperPointLightGlueMatcher:
         self._image_to_tensor = (
             image_to_tensor if image_to_tensor is not None else _load_image_to_tensor()
         )
-        self._match_fn = match_fn if match_fn is not None else _load_match_fn()
+        self._match_fn = (match_fn if match_fn is not None else
+                          None if feature_match_fn is not None else _load_match_fn())
 
     @property
     def model_name(self) -> str:
@@ -113,25 +132,58 @@ class SuperPointLightGlueMatcher:
         if query_image.mode != "RGB" or reference_image.mode != "RGB":
             raise ValueError("SuperPoint+LightGlue matcher expects RGB images")
 
-        query_tensor = self._image_to_tensor(query_image).to(self._device_name)
-        reference_tensor = self._image_to_tensor(reference_image).to(self._device_name)
         with self._torch.inference_mode():
             # match_pair's device only moves the result. Inference follows the
             # tensor and module device set above; CPU results are what we serialize.
-            feats0, feats1, matches01 = self._match_fn(
-                self.extractor,
-                self.matcher,
-                query_tensor,
-                reference_tensor,
-                device="cpu",
-                resize=self.resize,
-            )
+            if self._use_feature_cache:
+                feats0 = self._features(query_image, persistent=False)
+                feats1 = self._features(reference_image, persistent=True)
+                feats0, feats1, matches01 = self._feature_match_fn(self.matcher, feats0, feats1)
+            else:
+                query_tensor = self._image_to_tensor(query_image).to(self._device_name)
+                reference_tensor = self._image_to_tensor(reference_image).to(self._device_name)
+                feats0, feats1, matches01 = self._match_fn(
+                    self.extractor, self.matcher, query_tensor, reference_tensor,
+                    device="cpu", resize=self.resize,
+                )
             if self._device_name.startswith("cuda"):
                 # Pinned LightGlue match_pair uses non_blocking=True when
                 # copying to CPU. Reading tolist() before those copies finish
                 # can produce stale/garbage keypoints and match indices.
                 self._torch.cuda.synchronize(self._device_name)
         return prediction_from_features(feats0, feats1, matches01)
+
+    def _features(self, image: Image.Image, *, persistent: bool) -> dict:
+        if self._feature_signature is None:
+            signature = hashlib.sha256()
+            signature.update(repr(("superpoint-cache-v1", str(type(self.extractor)),
+                                   str(getattr(self.extractor, "conf", "")),
+                                   str(getattr(self._torch, "__version__", "")),
+                                   self._device_name)).encode())
+            # Invalidate disk features when the actual detector weights change.
+            if hasattr(self.extractor, "state_dict"):
+                for name, value in sorted(self.extractor.state_dict().items()):
+                    signature.update(name.encode())
+                    signature.update(value.detach().cpu().numpy().tobytes())
+            self._feature_signature = signature.digest()
+        digest = hashlib.sha256(self._feature_signature)
+        digest.update(repr((image.size, image.mode, self.resize, self.max_num_keypoints)).encode())
+        digest.update(image.tobytes())
+        key = digest.hexdigest()
+        cpu_features = self.feature_cache.get(key, self._torch, persistent=persistent)
+        if cpu_features is None:
+            tensor = self._image_to_tensor(image).to(self._device_name)
+            features = self.extractor.extract(tensor, resize=self.resize)
+            cpu_features = self.feature_cache.put(key, features, persistent=persistent)
+        # Protect cached tensors even if a matcher version mutates its inputs.
+        return {name: value.to(self._device_name).clone() for name, value in cpu_features.items()}
+
+
+def _match_cached_features(matcher, feats0: dict, feats1: dict):
+    utils = import_module("lightglue.utils")
+    matched = matcher({"image0": feats0, "image1": feats1})
+    return tuple(utils.batch_to_device(utils.rbd(item), "cpu")
+                 for item in (feats0, feats1, matched))
 
 
 def prediction_from_features(

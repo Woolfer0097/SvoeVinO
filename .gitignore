@@ -1,5 +1,9 @@
 Датасет
 .env
+.env.cloud
+*.dump
+artifacts/
+deploy/releases/
 DataFoto/
 
 # Byte-compiled / optimized / DLL files

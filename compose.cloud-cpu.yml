@@ -1,0 +1,86 @@
+# CPU-only single-VM deployment. Use with compose.pipeline.yml and .env.cloud.
+# HTTPS ingress through Caddy; backend/database stay private.
+# Never commit .env.cloud or DB dumps.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_DB: dinov2
+      POSTGRES_USER: dinov2
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - postgres_cloud:/var/lib/postgresql/data
+    networks: [catalog]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dinov2 -d dinov2"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+    logging: &cloud_logging
+      driver: local
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  dinov2:
+    gpus: !reset []
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    environment:
+      DINO_DEVICE: cpu
+      DINO_DTYPE: float32
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    logging: *cloud_logging
+
+  superpoint:
+    gpus: !reset []
+    build:
+      args:
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cpu
+    environment:
+      DEVICE: cpu
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
+    logging: *cloud_logging
+
+  ocr:
+    logging: *cloud_logging
+
+  preprocessing:
+    logging: *cloud_logging
+
+  backend:
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *cloud_logging
+
+  frontend:
+    ports: !override
+      - "127.0.0.1:3000:3000"
+    logging: *cloud_logging
+
+  proxy:
+    image: caddy:2
+    environment:
+      SITE_ADDRESS: ${SITE_ADDRESS:?Set SITE_ADDRESS to the demo hostname}
+    ports:
+      - "0.0.0.0:80:80"
+      - "0.0.0.0:443:443"
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./deploy/releases:/srv/releases:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [frontend]
+    networks: [catalog]
+    restart: unless-stopped
+    logging: *cloud_logging
+
+volumes:
+  postgres_cloud:
+  caddy_data:
+  caddy_config:

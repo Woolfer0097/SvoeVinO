@@ -4,7 +4,7 @@ import type { PhotoSource } from "~/utils/photo";
 
 const config = useRuntimeConfig().public;
 const recognition = useRecognition();
-const { phase, stage, progress, jobId, result, problem, isBusy } = recognition;
+const { phase, stage, progress, jobId, result, problem, isBusy, canResume } = recognition;
 
 const cameraInput = ref<HTMLInputElement>();
 const galleryInput = ref<HTMLInputElement>();
@@ -119,7 +119,7 @@ onBeforeUnmount(() => {
           kind="error"
           :title="problem.title"
           :message="problem.message"
-          primary-label="Повторить поиск"
+          :primary-label="canResume ? 'Проверить результат' : 'Повторить поиск'"
           secondary-label="Выбрать другое фото"
           @primary="retry"
           @secondary="openPicker('gallery')"

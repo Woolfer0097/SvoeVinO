@@ -29,7 +29,7 @@ const PROBLEMS: Record<ProblemKind, [string, string]> = {
   unsupported: ["Формат не подходит", "Загрузите фото в формате JPG, PNG или WebP."],
   unreadable: ["Не получилось прочитать фото", "Файл повреждён или это не изображение. Попробуйте другое фото."],
   unavailable: ["Сервис временно недоступен", "Модель или база данных ещё не готовы. Попробуйте через минуту."],
-  timeout: ["Поиск занял слишком много времени", "Сервер так и не прислал результат. Попробуйте ещё раз."],
+  timeout: ["Поиск занял слишком много времени", "Задача может ещё выполняться. Нажмите «Проверить результат», чтобы продолжить ожидание без повторной отправки фото."],
   job_lost: ["Задача потерялась", "Сервер больше не знает об этом поиске — возможно, он перезапустился. Запустите поиск заново."],
   job_failed: ["Не удалось найти вино", "Во время поиска произошла ошибка. Попробуйте ещё раз."],
   unknown: ["Что-то пошло не так", "Сервер ответил ошибкой. Попробуйте ещё раз."],
@@ -71,15 +71,15 @@ function sleep(ms: number, signal: AbortSignal): Promise<void> {
       reject(signal.reason);
       return;
     }
-    const timer = setTimeout(resolve, ms);
-    signal.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        reject(signal.reason);
-      },
-      { once: true },
-    );
+    const aborted = () => {
+      clearTimeout(timer);
+      reject(signal.reason);
+    };
+    const timer = setTimeout(() => {
+      signal.removeEventListener("abort", aborted);
+      resolve();
+    }, ms);
+    signal.addEventListener("abort", aborted, { once: true });
   });
 }
 
@@ -96,6 +96,8 @@ export function useRecognition() {
   let controller: AbortController | null = null;
 
   const isBusy = computed(() => phase.value === "uploading" || phase.value === "polling");
+  const canResume = computed(() => jobId.value !== null
+    && (problem.value?.kind === "timeout" || problem.value?.kind === "network"));
 
   async function upload(file: File, scenario: string | undefined, signal: AbortSignal): Promise<JobAccepted> {
     const form = new FormData();
@@ -166,12 +168,7 @@ export function useRecognition() {
       jobId.value = accepted.job_id;
       phase.value = "polling";
 
-      const status = await poll(accepted, signal);
-      const response = status.result;
-      result.value = response;
-      // A weak match still has a useful Top-1. Also show candidates from older
-      // jobs that used no_results to indicate uncertainty rather than emptiness.
-      phase.value = response?.candidates.length ? "done" : "empty";
+      await awaitResult(accepted, signal);
     } catch (error) {
       if (signal.aborted) return;
       problem.value =
@@ -182,7 +179,37 @@ export function useRecognition() {
     }
   }
 
+  async function awaitResult(accepted: JobAccepted, signal: AbortSignal) {
+    const status = await poll(accepted, signal);
+    const response = status.result;
+    result.value = response;
+    // Weak matches still have useful candidates; do not hide them.
+    phase.value = response?.candidates.length ? "done" : "empty";
+  }
+
+  async function resume() {
+    const existingId = jobId.value;
+    if (!existingId || isBusy.value) return;
+    cancel();
+    const current = new AbortController();
+    controller = current;
+    phase.value = "polling";
+    problem.value = null;
+    try {
+      await awaitResult({ job_id: existingId, state: "processing", poll_after_ms: 0 }, current.signal);
+    } catch (error) {
+      if (current.signal.aborted) return;
+      problem.value = error instanceof RecognitionFailure
+        ? problemOf(error.kind, error.serverMessage) : problemOf("unknown");
+      phase.value = "error";
+    } finally {
+      if (controller === current) controller = null;
+    }
+  }
+
   function retry(options: { scenario?: string } = {}) {
+    if (isBusy.value) return;
+    if (canResume.value) return resume();
     if (lastFile.value) return start(lastFile.value, options);
   }
 
@@ -198,6 +225,10 @@ export function useRecognition() {
     phase.value = "idle";
     result.value = null;
     problem.value = null;
+    jobId.value = null;
+    lastFile.value = null;
+    stage.value = null;
+    progress.value = 0;
   }
 
   onScopeDispose(cancel);
@@ -210,6 +241,7 @@ export function useRecognition() {
     result,
     problem: readonly(problem),
     isBusy,
+    canResume,
     start,
     retry,
     cancel,

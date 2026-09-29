@@ -1,0 +1,40 @@
+{
+    # Only TCP 443 is published on this VM; do not advertise unreachable QUIC.
+    servers {
+        protocols h1 h2
+    }
+}
+
+{$SITE_ADDRESS} {
+    encode zstd gzip
+    # Clear HTTP/3 alternatives previously cached by clients.
+    header Alt-Svc "clear"
+    log {
+        output stdout
+        format json
+    }
+
+    # Only sanitized reviewer artifacts are exposed, never the catalog data
+    # directory, feedback images, backups or environment files.
+    @runtime path /downloads/svoevino-runtime-giant-e5-20260929-v2.zip /downloads/svoevino-runtime-giant-e5-20260929-v2.zip.sha256
+    handle @runtime {
+        uri strip_prefix /downloads
+        root * /srv/releases
+        header Content-Disposition "attachment"
+        header X-Content-Type-Options "nosniff"
+        file_server
+    }
+
+    @pipeline path /v1/eval/predict /image/status /docs /redoc /openapi.json /feedback /feedback/*
+    handle @pipeline {
+        reverse_proxy backend:8080 {
+            transport http {
+                response_header_timeout 130s
+            }
+        }
+    }
+
+    handle {
+        reverse_proxy frontend:3000
+    }
+}
