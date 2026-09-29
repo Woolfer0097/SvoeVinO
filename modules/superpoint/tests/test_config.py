@@ -7,10 +7,12 @@ import pytest
 from superpoint.config import (
     ConfigurationError,
     get_data_root,
+    get_depth_confidence,
     get_max_num_keypoints,
     get_requested_device,
     get_resize,
     get_verification_thresholds,
+    get_width_confidence,
 )
 
 
@@ -48,3 +50,15 @@ def test_invalid_device_is_rejected() -> None:
 def test_inlier_ratio_must_be_a_fraction() -> None:
     with pytest.raises(ConfigurationError, match="MIN_INLIER_RATIO"):
         get_verification_thresholds(min_inlier_ratio=1.5)
+
+
+def test_lightweight_profile_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MAX_NUM_KEYPOINTS", "512")
+    monkeypatch.setenv("SUPERPOINT_RESIZE", "768")
+    monkeypatch.setenv("LIGHTGLUE_DEPTH_CONFIDENCE", "0.90")
+    monkeypatch.setenv("LIGHTGLUE_WIDTH_CONFIDENCE", "0.95")
+
+    assert get_max_num_keypoints() == 512
+    assert get_resize() == 768
+    assert get_depth_confidence() == 0.90
+    assert get_width_confidence() == 0.95

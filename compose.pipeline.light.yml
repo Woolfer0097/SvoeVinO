@@ -1,0 +1,9 @@
+# Optional speed/quality trade-off for CPU or GPU. Append LAST to Compose files.
+# Omitting this override restores the full 1024-point / 1024-pixel profile.
+services:
+  superpoint:
+    environment:
+      MAX_NUM_KEYPOINTS: "512"
+      SUPERPOINT_RESIZE: "768"
+      LIGHTGLUE_DEPTH_CONFIDENCE: "0.90"
+      LIGHTGLUE_WIDTH_CONFIDENCE: "0.95"

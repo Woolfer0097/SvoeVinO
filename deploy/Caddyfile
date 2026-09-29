@@ -14,9 +14,8 @@
         format json
     }
 
-    # Only sanitized reviewer artifacts are exposed, never the catalog data
-    # directory, feedback images, backups or environment files.
-    @runtime path /downloads/svoevino-runtime-giant-e5-20260929-v2.zip /downloads/svoevino-runtime-giant-e5-20260929-v2.zip.sha256
+    # Explicit allowlist: no database directory, feedback photos or secrets.
+    @runtime path /downloads/svoevino-runtime-giant-e5-20260929-final.zip /downloads/svoevino-runtime-giant-e5-20260929-final.zip.sha256
     handle @runtime {
         uri strip_prefix /downloads
         root * /srv/releases

@@ -32,8 +32,9 @@ image=<JPEG|PNG|WebP, до 10 MiB>
 ### Требования
 
 - Git, Docker Engine и Docker Compose v2 с поддержкой `gpus` и Compose override;
-- NVIDIA GPU, актуальный драйвер и NVIDIA Container Toolkit;
-- от 16 GiB RAM и около 15 GiB места для образов, моделей и данных;
+- NVIDIA GPU, драйвер и NVIDIA Container Toolkit для GPU-профиля;
+  CPU-профиль ниже работает без GPU;
+- от 16 GiB RAM и около 35 GiB свободного места для образов, моделей и данных;
 - runtime-архив: дамп PostgreSQL с готовыми эмбеддингами и эталонные фото.
 
 Проверка GPU:
@@ -42,10 +43,10 @@ image=<JPEG|PNG|WebP, до 10 MiB>
 docker run --rm --gpus all nvidia/cuda:12.6.0-base-ubuntu24.04 nvidia-smi
 ```
 
-> Большие данные, дамп и кэши не хранятся в Git. Перед сдачей опубликуйте
-> runtime-архив без запроса доступа и внесите ссылку в
-> [docs/SUBMISSION.md](docs/SUBMISSION.md). Без него чистый клон не сможет
-> выполнить полноценное распознавание.
+> Большие данные, дамп и кэши не хранятся в Git. Скачайте
+> [runtime-архив](https://wine.knittta.ru/downloads/svoevino-runtime-giant-e5-20260929-final.zip)
+> (352 МБ). SHA-256 указан в [docs/SUBMISSION.md](docs/SUBMISSION.md).
+> Без архива чистый клон не сможет выполнить полноценное распознавание.
 
 Все команды выполняются из корня репозитория в Linux/macOS или WSL.
 
@@ -58,27 +59,25 @@ mkdir -p modules/dinov2_retrieval/data/reference/feedback
 mkdir -p modules/dinov2_retrieval/model-cache
 ```
 
-Распакуйте публичный runtime-архив в `modules/dinov2_retrieval/data/`.
-Ожидаются как минимум `web_photos/`, `reference/catalog/` и дамп в `exports/`.
+Распакуйте `svoevino-runtime-giant-e5-20260929-final.zip` в
+`modules/dinov2_retrieval/data/`. В архиве есть `web_photos/`,
+`reference/catalog/`, дамп `exports/catalog-giant-e5.dump`, инструкция
+`README_RUNTIME.md`, manifest с SHA-256 файлов и небольшие скрипты `reviewer/`.
+Образы и веса моделей скачиваются при первом запуске; нужен интернет.
 
 ### 2. Восстановить каталог
 
 ```bash
 cp modules/dinov2_retrieval/.env.example modules/dinov2_retrieval/.env
 docker compose -f modules/dinov2_retrieval/docker-compose.yml up -d postgres
-docker compose -f modules/dinov2_retrieval/docker-compose.yml exec -T postgres \
-  pg_restore -U dinov2 -d dinov2 --clean --if-exists --no-owner --no-acl \
-  < modules/dinov2_retrieval/data/exports/dinov2-giant-e5-20260929.dump
+bash modules/dinov2_retrieval/data/reviewer/restore_runtime.sh "$PWD"
 ```
 
-Имя дампа может отличаться — используйте имя из опубликованного архива. Если
-в дампе ещё нет `reference_images`, опубликуйте готовые векторы из `wines`:
-
-```bash
-docker compose -f modules/dinov2_retrieval/docker-compose.yml \
-  --profile pipeline run --rm --entrypoint python wine-pipeline \
-  -m dinov2_retrieval.wine_catalog.publish_references --data-root /data
-```
+Скрипт откажется перезаписывать заполненную БД. Он поддерживает свежую пустую
+БД и пустую таблицу, которую создаёт Compose при инициализации. Дамп содержит
+4 147 записей, 2 103 уникальных slug, 4 017 эталонов DINOv2 giant / 1536 и
+4 147 текстовых эмбеддингов multilingual-e5-base / 768. Повторная векторизация
+не нужна. Пользовательские фото/эмбеддинги и отзывы исключены.
 
 ### 3. Запустить приложение
 
@@ -123,22 +122,28 @@ docker compose -f modules/dinov2_retrieval/docker-compose.yml stop postgres
 
 Не используйте `down -v`, если хотите сохранить базу.
 
-## CPU-only стенд
+## CPU-only запуск для проверяющих
 
-Создайте игнорируемый Git файл `.env.cloud`:
-
-```dotenv
-POSTGRES_PASSWORD=replace-with-a-long-random-password
-DATABASE_URL=postgresql://dinov2:replace-with-a-long-random-password@postgres:5432/dinov2
-```
+После восстановления каталога используйте override из runtime-архива:
 
 ```bash
-docker compose --env-file .env.cloud \
-  -f compose.pipeline.yml -f compose.cloud-cpu.yml up -d --build
+docker compose -f compose.pipeline.yml \
+  -f modules/dinov2_retrieval/data/reviewer/compose.cpu.yml up -d --build
 ```
 
-Frontend будет на порту 80. CPU-профиль существенно медленнее. Для публичного
-стенда дополнительно нужны HTTPS, firewall и reverse proxy.
+Frontend остаётся на `localhost:3000`, Swagger — на `localhost:8080/docs`.
+Домен и `.env.cloud` не нужны. Такой же профиль есть в корне:
+`-f compose.pipeline.cpu.yml`.
+
+Для облегчённой геометрической проверки добавьте последним
+`-f compose.pipeline.light.yml`: 512 точек, длинная сторона 768 px,
+ранний выход LightGlue `0.90`, отсечение точек `0.95`.
+Полный профиль остаётся доступен без этого override. Кэш признаков используется
+в обоих профилях, но меньшие разрешение и число точек могут ухудшить качество.
+
+Публичный CPU-стенд с уникальным паролем, HTTPS и Caddy описан отдельно в
+[deploy/README.md](deploy/README.md). Не используйте cloud-профиль для локальной
+проверки без настройки домена.
 
 ## Тесты
 
@@ -175,7 +180,9 @@ modules/ocr/                           PaddleOCR и E5
 docs/                                  документация сдачи
 compose.pipeline.yml                   основной профиль
 compose.pipeline.gpu.yml               all-GPU override
-compose.cloud-cpu.yml                  CPU-only override
+compose.pipeline.cpu.yml               локальный CPU-only override
+compose.pipeline.light.yml             облегчённый SuperPoint/LightGlue override
+compose.cloud-cpu.yml                  публичный CPU-only стенд с HTTPS
 ```
 
 ## Ограничения

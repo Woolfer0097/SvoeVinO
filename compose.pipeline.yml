@@ -47,6 +47,9 @@ services:
       DEVICE: cuda
       TORCH_HOME: /home/app/.cache/torch
       MAX_NUM_KEYPOINTS: "1024"
+      SUPERPOINT_RESIZE: "1024"
+      LIGHTGLUE_DEPTH_CONFIDENCE: "0.95"
+      LIGHTGLUE_WIDTH_CONFIDENCE: "0.99"
       SUPERPOINT_FEATURE_CACHE_MB: "256"
       SUPERPOINT_FEATURE_CACHE_DIR: /home/app/.cache/torch/superpoint-features
       OMP_NUM_THREADS: "2"

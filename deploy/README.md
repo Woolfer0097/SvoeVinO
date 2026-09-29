@@ -3,8 +3,31 @@
 The cloud override runs PostgreSQL/pgvector, DINOv2 giant (1536), SuperPoint /
 LightGlue, OCR / multilingual E5, preprocessing, the pipeline API, the production
 Nuxt frontend and Caddy. It does not require a GPU. The current VM has 4 vCPUs,
-16 GB RAM and an 80 GB disk. Recognition latency on this CPU is not yet measured;
-these resources do not guarantee the organizer's 120-second limit.
+16 GB RAM and an 80 GB disk. Before feature caching, observed processing times
+were 114–265 seconds excluding queue wait; queued requests could take longer.
+These resources do not guarantee the organizer's 120-second limit.
+
+SuperPoint now caches unchanged detector features: a bounded 256 MiB CPU-memory
+LRU plus reference-only NPZ files in the persistent `superpoint_cache` volume.
+Uploaded-query features never persist on disk. Reference caching is lazy, so the
+first encounter still extracts each reference; subsequent requests reuse it.
+Model weights, device, resize and keypoint settings are part of the cache key.
+The cache alone leaves matching/RANSAC parameters unchanged. On three local CPU pairs,
+uncached matching took 10.04 s and disk-cached references with a newly extracted
+query took 4.07 s, with identical correspondences. This is not a cloud end-to-end
+latency measurement or a recognition-quality evaluation.
+
+The VM now additionally uses `compose.pipeline.light.yml`, appended last:
+512 keypoints, 768-pixel long edge, LightGlue depth confidence 0.90 and width
+confidence 0.95. DINOv2, OCR, the matching filter and RANSAC thresholds are
+unchanged. These lighter settings may reduce recognition quality and have not
+been evaluated on the organizer set. The feature cache automatically separates
+the two detector profiles; old full-profile features are kept for rollback.
+
+Memory diagnostics showed about 4.9 GiB used and 10 GiB available, no OOM, and
+no container memory/CPU quota. The workstation uses an RTX 2050 and 12 Docker
+CPU threads; the VM is CPU-only with 4 vCPUs. Increasing RAM alone is unlikely
+to address the matching bottleneck.
 
 ## Runtime inputs
 
@@ -47,13 +70,29 @@ HTTP/3 would point browsers at an unreachable transport. `Alt-Svc: clear`
 removes HTTP/3 alternatives cached before this configuration change. Access logs
 go to the rotated Docker log, without uploaded image bodies.
 
+Sanitized reviewer artifacts are served directly by Caddy, not the ML API:
+`/downloads/svoevino-runtime-giant-e5-20260929-final.zip` and its `.sha256` file.
+Only these two exact paths are allowed. The dedicated `deploy/releases/`
+directory is mounted read-only, directory browsing is disabled, and database /
+feedback directories are not exposed. Keep this VM and HTTPS available while
+reviewers need the download link. To rebuild a new runtime locally:
+
+```bash
+python3 deploy/build_runtime_archive.py --output artifacts/new-runtime.zip
+```
+
+The exporter makes and sanitizes its own temporary database, excludes private
+feedback/sample data and vectors, checks photo paths and ZIP integrity, and
+does not change the active catalog. Add a new explicit Caddy path only after
+verifying the new artifact and updating its checksum in `docs/SUBMISSION.md`.
+
 When replacing the single-file Caddy bind mount with an atomic file transfer,
 recreate only the proxy so it sees the new file inode, then check its response
 headers:
 
 ```bash
 docker compose --env-file .env.cloud \
-  -f compose.pipeline.yml -f compose.cloud-cpu.yml \
+  -f compose.pipeline.yml -f compose.cloud-cpu.yml -f compose.pipeline.light.yml \
   up -d --no-deps --force-recreate proxy
 ```
 
@@ -66,16 +105,27 @@ cd /home/woolfer0097/SvoeVinO
 docker network inspect dinov2_retrieval_default >/dev/null 2>&1 \
   || docker network create dinov2_retrieval_default
 docker compose --env-file .env.cloud \
-  -f compose.pipeline.yml -f compose.cloud-cpu.yml config --quiet
+  -f compose.pipeline.yml -f compose.cloud-cpu.yml -f compose.pipeline.light.yml config --quiet
 docker compose --env-file .env.cloud \
-  -f compose.pipeline.yml -f compose.cloud-cpu.yml up -d --build
+  -f compose.pipeline.yml -f compose.cloud-cpu.yml -f compose.pipeline.light.yml up -d --build
 docker compose --env-file .env.cloud \
-  -f compose.pipeline.yml -f compose.cloud-cpu.yml ps
+  -f compose.pipeline.yml -f compose.cloud-cpu.yml -f compose.pipeline.light.yml ps
 ```
 
 The merged configuration removes GPU reservations, builds CPU PyTorch wheels,
 and switches DINOv2 to float32. Log rotation is enabled. Containers restart after
 a Docker / VM restart. Do not run the base compose file alone on this CPU VM.
+
+To roll back only SuperPoint to the full profile, omit the light override:
+
+```bash
+docker compose --env-file .env.cloud \
+  -f compose.pipeline.yml -f compose.cloud-cpu.yml up -d --no-deps superpoint
+```
+
+To re-enable it, append `-f compose.pipeline.light.yml` before `up`. Always keep
+the same Compose file list for full-stack updates, or an update can silently
+restore the full profile.
 
 ```bash
 # Recent logs; do not publish logs that contain user data.

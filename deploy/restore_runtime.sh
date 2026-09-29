@@ -8,11 +8,11 @@ task_dump="$task_repo_root/modules/dinov2_retrieval/data/exports/catalog-giant-e
 test -f "$task_dump" || { echo 'Runtime dump is missing. Unpack the archive into modules/dinov2_retrieval/data/.' >&2; exit 1; }
 task_compose=(docker compose -f modules/dinov2_retrieval/docker-compose.yml)
 for task_attempt in {1..30}; do
-  if "${task_compose[@]}" exec -T postgres pg_isready -U dinov2 -d dinov2 >/dev/null 2>&1; then break; fi
+  if "${task_compose[@]}" exec -T postgres pg_isready -U dinov2 -d dinov2 </dev/null >/dev/null 2>&1; then break; fi
   sleep 1
 done
 task_table_count="$("${task_compose[@]}" exec -T postgres psql -X -U dinov2 -d dinov2 -Atc \
-  "SELECT count(*) FROM pg_tables WHERE schemaname='public';")"
+  "SELECT count(*) FROM pg_tables WHERE schemaname='public';" </dev/null)"
 if [[ "$task_table_count" == 1 ]]; then
   # Fresh Compose initializes exactly this empty table before restoring a dump.
   # Validate the known scaffold inside one transaction, never a populated table.
@@ -34,7 +34,7 @@ if [[ "$task_table_count" == 1 ]]; then
         RAISE EXCEPTION '\''Refusing to replace an unknown initialization schema'\'';
       END IF;
       DROP TABLE public.reference_images;
-    END $runtime$;'
+    END $runtime$;' </dev/null
 elif [[ "$task_table_count" != 0 ]]; then
   echo 'Refusing to overwrite a database containing tables. Use a new, empty PostgreSQL instance.' >&2
   exit 1
@@ -42,4 +42,4 @@ fi
 "${task_compose[@]}" exec -T postgres pg_restore -U dinov2 -d dinov2 \
   --exit-on-error --no-owner --no-acl < "$task_dump"
 "${task_compose[@]}" exec -T postgres psql -X -U dinov2 -d dinov2 -c \
-  'SELECT count(*) AS wines, count(DISTINCT slug) AS slugs FROM wines; SELECT count(*) AS reference_images FROM reference_images;'
+  'SELECT count(*) AS wines, count(DISTINCT slug) AS slugs FROM wines; SELECT count(*) AS reference_images FROM reference_images;' </dev/null
